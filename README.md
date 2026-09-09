@@ -53,6 +53,3 @@ npm run tauri dev
 # Build frontend and generate Windows NSIS installer
 npm run tauri build -- --bundles nsis
 ```
-
-The installer executable will be generated at:
-`src-tauri/target/release/bundle/nsis/Kcache_0.1.0_x64-setup.exe`
