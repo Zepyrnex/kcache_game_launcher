@@ -11,10 +11,12 @@ import {
   CheckCircle2,
   Cpu,
   FolderArchive,
+  User as UserIcon,
 } from "lucide-react";
 import clsx from "clsx";
 
 import { useCompressor } from "../hooks/useScanner";
+import { useAuth } from "../contexts/AuthContext";
 
 const NAV_ITEMS = [
   { to: "/", label: "Game Library", icon: LayoutDashboard },
@@ -45,6 +47,7 @@ export function AppShell() {
   const currentCache = searchParams.get("cache") || "all";
   const isLibraryActive = location.pathname === "/";
   const { processingIds, activeProgress } = useCompressor();
+  const { session, user } = useAuth();
 
   function setPlatformFilter(platformId: string) {
     const params = new URLSearchParams(location.search);
@@ -187,8 +190,39 @@ export function AppShell() {
           </div>
         </div>
 
-        <div className="px-4 py-3 border-t border-white/5 flex items-center justify-between flex-shrink-0 bg-surface-900/90">
-          <span className="text-[11px] text-gray-500">v0.1.0</span>
+        <div className="flex flex-col border-t border-white/5 bg-surface-900/90 flex-shrink-0">
+          <div className="px-5 py-3 flex items-center justify-between border-b border-white/5">
+            <div className="flex items-center gap-3 overflow-hidden">
+              {session && user ? (
+                <>
+                  <div className="w-7 h-7 rounded-full bg-accent-600/30 flex items-center justify-center flex-shrink-0 text-accent-400 text-xs font-bold ring-1 ring-accent-500/20">
+                    {user.user_metadata?.full_name?.[0]?.toUpperCase() || user.email?.[0]?.toUpperCase()}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold text-gray-200 truncate">{user.user_metadata?.full_name || "Vault Hunter"}</p>
+                    <p className="text-[10px] text-accent-400 flex items-center gap-1.5 truncate">
+                      <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" /> Cloud Sync Active
+                    </p>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="w-7 h-7 rounded-full bg-surface-800 flex items-center justify-center flex-shrink-0 text-gray-400 text-xs font-bold ring-1 ring-white/5">
+                    <UserIcon size={14} />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold text-gray-200 truncate">Guest Mode</p>
+                    <p className="text-[10px] text-gray-500 flex items-center gap-1.5 truncate">
+                      <span className="w-1.5 h-1.5 rounded-full bg-gray-500" /> Local Only
+                    </p>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+          <div className="px-4 py-2 flex items-center justify-between">
+            <span className="text-[10px] text-gray-600 font-medium">v0.1.0</span>
+          </div>
         </div>
       </aside>
 

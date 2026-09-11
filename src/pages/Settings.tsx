@@ -26,8 +26,12 @@ import {
 } from "../hooks/useScanner";
 import { EverythingStatus, ScanFolder, ExcludedGame } from "../types";
 import { open } from "@tauri-apps/plugin-dialog";
+import { useAuth } from "../contexts/AuthContext";
+import { LogOut, User as UserIcon } from "lucide-react";
+import { Link } from "react-router-dom";
 
 export function Settings() {
+  const { session, user, signOut } = useAuth();
   const [settings, setSettings] = useState<Record<string, string>>({});
   const [everythingStatus, setEverythingStatus] = useState<EverythingStatus | null>(null);
 
@@ -178,6 +182,44 @@ export function Settings() {
         <h1 className="text-lg font-semibold text-gray-100">Settings</h1>
         <p className="text-xs text-gray-500 mt-0.5">Configure Kcache launcher and scanner options</p>
       </div>
+
+      <section className="glass-card p-5 space-y-4">
+        <div className="flex items-center gap-3">
+          <UserIcon size={16} className="text-accent-400" />
+          <div>
+            <h2 className="font-semibold text-gray-200">Account</h2>
+            <p className="text-xs text-gray-500">Manage your Kcache profile & sync</p>
+          </div>
+        </div>
+
+        {session && user ? (
+          <div className="flex items-center justify-between bg-surface-900/60 border border-white/5 p-4 rounded-xl">
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 bg-accent-600/20 text-accent-400 rounded-full flex items-center justify-center font-bold text-lg">
+                {user.user_metadata?.full_name?.[0]?.toUpperCase() || user.email?.[0]?.toUpperCase()}
+              </div>
+              <div>
+                <p className="text-sm font-medium text-gray-200">{user.user_metadata?.full_name || "Vault Hunter"}</p>
+                <p className="text-xs text-gray-500">{user.email}</p>
+              </div>
+            </div>
+            <button onClick={signOut} className="btn-ghost text-xs flex items-center gap-2 hover:text-red-400">
+              <LogOut size={14} />
+              Sign Out
+            </button>
+          </div>
+        ) : (
+          <div className="bg-surface-900/60 border border-info/30 p-4 rounded-xl flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-gray-200">Guest Mode (Local Only)</p>
+              <p className="text-xs text-gray-500 mt-0.5">Sign in to sync your vault across devices.</p>
+            </div>
+            <Link to="/login" onClick={signOut} className="btn-accent text-xs px-4">
+              Sign In to Sync
+            </Link>
+          </div>
+        )}
+      </section>
 
       <section className="glass-card p-5 space-y-4">
         <div className="flex items-center gap-3">
