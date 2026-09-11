@@ -10,12 +10,16 @@ import {
   Zap,
   CheckCircle2,
   Cpu,
+  FolderArchive,
 } from "lucide-react";
 import clsx from "clsx";
+
+import { useCompressor } from "../hooks/useScanner";
 
 const NAV_ITEMS = [
   { to: "/", label: "Game Library", icon: LayoutDashboard },
   { to: "/trash", label: "Trash", icon: Trash2 },
+  { to: "/compressor", label: "Compressor", icon: FolderArchive },
   { to: "/settings", label: "Settings", icon: Settings },
 ];
 
@@ -40,6 +44,7 @@ export function AppShell() {
   const currentPlatform = searchParams.get("platform") || "all";
   const currentCache = searchParams.get("cache") || "all";
   const isLibraryActive = location.pathname === "/";
+  const { processingIds, activeProgress } = useCompressor();
 
   function setPlatformFilter(platformId: string) {
     const params = new URLSearchParams(location.search);
@@ -82,24 +87,33 @@ export function AppShell() {
               Menu
             </p>
             <nav className="space-y-1">
-              {NAV_ITEMS.map(({ to, label, icon: Icon }) => (
-                <NavLink
-                  key={to}
-                  to={to}
-                  end={to === "/"}
-                  className={({ isActive }) =>
-                    clsx(
-                      "flex items-center gap-3 px-3 py-2 rounded-lg text-xs font-medium transition-all duration-150",
-                      isActive
-                        ? "bg-accent-600/20 text-accent-300 border border-accent-600/30 font-semibold"
-                        : "text-gray-400 hover:text-gray-200 hover:bg-white/5"
-                    )
-                  }
-                >
-                  <Icon size={15} />
-                  <span>{label}</span>
-                </NavLink>
-              ))}
+              {NAV_ITEMS.map(({ to, label, icon: Icon }) => {
+                const isCompressorActive =
+                  to === "/compressor" &&
+                  (processingIds.size > 0 || (activeProgress && activeProgress.stage !== "done"));
+
+                return (
+                  <NavLink
+                    key={to}
+                    to={to}
+                    end={to === "/"}
+                    className={({ isActive }) =>
+                      clsx(
+                        "flex items-center gap-3 px-3 py-2 rounded-lg text-xs font-medium transition-all duration-150 relative",
+                        isActive
+                          ? "bg-accent-600/20 text-accent-300 border border-accent-600/30 font-semibold"
+                          : "text-gray-400 hover:text-gray-200 hover:bg-white/5"
+                      )
+                    }
+                  >
+                    <Icon size={15} className={clsx(isCompressorActive && "animate-spin text-accent-400")} />
+                    <span>{label}</span>
+                    {isCompressorActive && (
+                      <span className="ml-auto w-2 h-2 rounded-full bg-accent-400 animate-ping" />
+                    )}
+                  </NavLink>
+                );
+              })}
             </nav>
           </div>
 

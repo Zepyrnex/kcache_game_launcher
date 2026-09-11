@@ -205,6 +205,60 @@ pub struct PlaytimeInfo {
     pub session_duration_secs: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompressionAlgorithm {
+    Zstd,
+    Lz4,
+}
+
+impl fmt::Display for CompressionAlgorithm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CompressionAlgorithm::Zstd => write!(f, "zstd"),
+            CompressionAlgorithm::Lz4 => write!(f, "lz4"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompressedVaultEntry {
+    pub id: String,
+    pub cache_id: String,
+    pub game_id: Option<String>,
+    pub game_name: String,
+    pub original_path: String,
+    pub compressed_path: String,
+    pub algorithm: CompressionAlgorithm,
+    pub original_size: u64,
+    pub compressed_size: u64,
+    pub ratio: f32,
+    pub compressed_at: i64,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompressionSummary {
+    pub total_original_bytes: u64,
+    pub total_compressed_bytes: u64,
+    pub total_bytes_saved: u64,
+    pub space_saved_percent: f32,
+    pub total_vault_items: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompressionProgress {
+    pub cache_id: String,
+    pub game_name: String,
+    pub stage: String,
+    pub current_file: String,
+    pub processed_files: usize,
+    pub total_files: usize,
+    pub processed_bytes: u64,
+    pub total_bytes: u64,
+    pub percent: f32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GameDiskSize {
     pub install_size_bytes: u64,

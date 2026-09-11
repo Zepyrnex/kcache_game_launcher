@@ -2,6 +2,7 @@ pub mod types;
 pub mod utils;
 pub mod db;
 pub mod backup;
+pub mod compressor;
 pub mod matcher;
 pub mod everything;
 pub mod commands;
@@ -95,6 +96,11 @@ pub fn run() {
             commands::update_game_exe,
             commands::get_game_disk_size,
             commands::get_game_playtime,
+            commands::compress_shader_cache,
+            commands::decompress_shader_cache,
+            commands::get_vault_entries,
+            commands::delete_vault_entry,
+            commands::open_vault_folder,
         ])
         .run(tauri::generate_context!())
         .expect("Error while running Kcache");

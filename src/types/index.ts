@@ -59,6 +59,43 @@ export interface GameDiskSize {
   total_size_bytes: number;
 }
 
+export type CompressionAlgorithm = "zstd" | "lz4";
+
+export interface CompressedVaultEntry {
+  id: string;
+  cache_id: string;
+  game_id: string | null;
+  game_name: string;
+  original_path: string;
+  compressed_path: string;
+  algorithm: CompressionAlgorithm;
+  original_size: number;
+  compressed_size: number;
+  ratio: number;
+  compressed_at: number;
+  status: "compressed" | "decompressed";
+}
+
+export interface CompressionSummary {
+  total_original_bytes: number;
+  total_compressed_bytes: number;
+  total_bytes_saved: number;
+  space_saved_percent: number;
+  total_vault_items: number;
+}
+
+export interface CompressionProgress {
+  cache_id: string;
+  game_name: string;
+  stage: string;
+  current_file: string;
+  processed_files: number;
+  total_files: number;
+  processed_bytes: number;
+  total_bytes: number;
+  percent: number;
+}
+
 export interface ScanFolder {
   id: number;
   path: string;

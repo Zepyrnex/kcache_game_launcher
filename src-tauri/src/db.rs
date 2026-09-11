@@ -1,5 +1,5 @@
 use rusqlite::{Connection, Result, OptionalExtension, params};
-use crate::types::{CacheEntry, CacheSource, DetectedGame, GamePlatform, BackupRecord, ScanFolder};
+use crate::types::{CacheEntry, CacheSource, DetectedGame, GamePlatform, BackupRecord, ScanFolder, CompressedVaultEntry, CompressionAlgorithm};
 use std::path::PathBuf;
 use log::info;
 
@@ -101,10 +101,27 @@ impl Database {
                 excluded_at     INTEGER NOT NULL DEFAULT (strftime('%s','now'))
             );
 
+            CREATE TABLE IF NOT EXISTS compressed_vault_entries (
+                id              TEXT PRIMARY KEY,
+                cache_id        TEXT NOT NULL,
+                game_id         TEXT,
+                game_name       TEXT NOT NULL,
+                original_path   TEXT NOT NULL,
+                compressed_path TEXT NOT NULL,
+                algorithm       TEXT NOT NULL,
+                original_size   INTEGER NOT NULL,
+                compressed_size INTEGER NOT NULL,
+                ratio           REAL NOT NULL,
+                compressed_at   INTEGER NOT NULL,
+                status          TEXT NOT NULL DEFAULT 'compressed'
+            );
+
             CREATE INDEX IF NOT EXISTS idx_cache_game ON cache_entries(game_id);
             CREATE INDEX IF NOT EXISTS idx_backups_game ON backups(game_id);
             CREATE INDEX IF NOT EXISTS idx_trash_game ON trash(game_id);
             CREATE INDEX IF NOT EXISTS idx_excluded_games ON excluded_games(id);
+            CREATE INDEX IF NOT EXISTS idx_vault_game ON compressed_vault_entries(game_id);
+            CREATE INDEX IF NOT EXISTS idx_vault_cache ON compressed_vault_entries(cache_id);
         "#)?;
 
         let _ = self.conn.execute("ALTER TABLE games ADD COLUMN exe_path TEXT NOT NULL DEFAULT ''", []);
@@ -711,6 +728,182 @@ impl Database {
         let json = serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_string());
         let _ = self.set_setting("excluded_game_ids", &json);
 
+        Ok(())
+    }
+
+    pub fn insert_vault_entry(&self, entry: &CompressedVaultEntry) -> Result<()> {
+        let algo_str = match entry.algorithm {
+            CompressionAlgorithm::Zstd => "zstd",
+            CompressionAlgorithm::Lz4 => "lz4",
+        };
+        self.conn.execute(
+            r#"
+            INSERT OR REPLACE INTO compressed_vault_entries (
+                id, cache_id, game_id, game_name, original_path, compressed_path,
+                algorithm, original_size, compressed_size, ratio, compressed_at, status
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+            "#,
+            params![
+                entry.id,
+                entry.cache_id,
+                entry.game_id,
+                entry.game_name,
+                entry.original_path,
+                entry.compressed_path,
+                algo_str,
+                entry.original_size as i64,
+                entry.compressed_size as i64,
+                entry.ratio,
+                entry.compressed_at,
+                entry.status
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_all_vault_entries(&self) -> Result<Vec<CompressedVaultEntry>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, cache_id, game_id, game_name, original_path, compressed_path,
+                   algorithm, original_size, compressed_size, ratio, compressed_at, status
+            FROM compressed_vault_entries
+            ORDER BY compressed_at DESC
+            "#,
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            let algo_str: String = row.get(6)?;
+            let algorithm = if algo_str == "lz4" {
+                CompressionAlgorithm::Lz4
+            } else {
+                CompressionAlgorithm::Zstd
+            };
+            let orig_sz: i64 = row.get(7)?;
+            let comp_sz: i64 = row.get(8)?;
+
+            Ok(CompressedVaultEntry {
+                id: row.get(0)?,
+                cache_id: row.get(1)?,
+                game_id: row.get(2)?,
+                game_name: row.get(3)?,
+                original_path: row.get(4)?,
+                compressed_path: row.get(5)?,
+                algorithm,
+                original_size: orig_sz as u64,
+                compressed_size: comp_sz as u64,
+                ratio: row.get(9)?,
+                compressed_at: row.get(10)?,
+                status: row.get(11)?,
+            })
+        })?;
+
+        let mut list = Vec::new();
+        for r in rows {
+            list.push(r?);
+        }
+        Ok(list)
+    }
+
+    pub fn get_vault_entry_by_id(&self, id: &str) -> Result<Option<CompressedVaultEntry>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, cache_id, game_id, game_name, original_path, compressed_path,
+                   algorithm, original_size, compressed_size, ratio, compressed_at, status
+            FROM compressed_vault_entries
+            WHERE id = ?1
+            "#,
+        )?;
+
+        let mut rows = stmt.query_map(params![id], |row| {
+            let algo_str: String = row.get(6)?;
+            let algorithm = if algo_str == "lz4" {
+                CompressionAlgorithm::Lz4
+            } else {
+                CompressionAlgorithm::Zstd
+            };
+            let orig_sz: i64 = row.get(7)?;
+            let comp_sz: i64 = row.get(8)?;
+
+            Ok(CompressedVaultEntry {
+                id: row.get(0)?,
+                cache_id: row.get(1)?,
+                game_id: row.get(2)?,
+                game_name: row.get(3)?,
+                original_path: row.get(4)?,
+                compressed_path: row.get(5)?,
+                algorithm,
+                original_size: orig_sz as u64,
+                compressed_size: comp_sz as u64,
+                ratio: row.get(9)?,
+                compressed_at: row.get(10)?,
+                status: row.get(11)?,
+            })
+        })?;
+
+        if let Some(first) = rows.next() {
+            Ok(Some(first?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn get_vault_entries_for_game(&self, game_id: &str) -> Result<Vec<CompressedVaultEntry>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, cache_id, game_id, game_name, original_path, compressed_path,
+                   algorithm, original_size, compressed_size, ratio, compressed_at, status
+            FROM compressed_vault_entries
+            WHERE game_id = ?1
+            ORDER BY compressed_at DESC
+            "#,
+        )?;
+
+        let rows = stmt.query_map(params![game_id], |row| {
+            let algo_str: String = row.get(6)?;
+            let algorithm = if algo_str == "lz4" {
+                CompressionAlgorithm::Lz4
+            } else {
+                CompressionAlgorithm::Zstd
+            };
+            let orig_sz: i64 = row.get(7)?;
+            let comp_sz: i64 = row.get(8)?;
+
+            Ok(CompressedVaultEntry {
+                id: row.get(0)?,
+                cache_id: row.get(1)?,
+                game_id: row.get(2)?,
+                game_name: row.get(3)?,
+                original_path: row.get(4)?,
+                compressed_path: row.get(5)?,
+                algorithm,
+                original_size: orig_sz as u64,
+                compressed_size: comp_sz as u64,
+                ratio: row.get(9)?,
+                compressed_at: row.get(10)?,
+                status: row.get(11)?,
+            })
+        })?;
+
+        let mut list = Vec::new();
+        for r in rows {
+            list.push(r?);
+        }
+        Ok(list)
+    }
+
+    pub fn update_vault_entry_status(&self, id: &str, status: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE compressed_vault_entries SET status = ?1 WHERE id = ?2",
+            params![status, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_vault_entry(&self, id: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM compressed_vault_entries WHERE id = ?1",
+            params![id],
+        )?;
         Ok(())
     }
 }

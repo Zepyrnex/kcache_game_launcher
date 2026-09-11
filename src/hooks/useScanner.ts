@@ -15,6 +15,9 @@ import type {
   ExcludedGame,
   PlaytimeInfo,
   GameDiskSize,
+  CompressedVaultEntry,
+  CompressionAlgorithm,
+  CompressionProgress,
 } from "../types";
 
 interface ScannerState {
@@ -384,4 +387,164 @@ export function formatTimer(totalSeconds: number): string {
   }
   return `${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
 }
+
+interface CompressorGlobalState {
+  activeProgress: CompressionProgress | null;
+  processingIds: Set<string>;
+}
+
+let globalCompressorState: CompressorGlobalState = {
+  activeProgress: null,
+  processingIds: new Set<string>(),
+};
+
+const compressorListeners = new Set<(state: CompressorGlobalState) => void>();
+
+function setGlobalCompressorState(
+  update: Partial<CompressorGlobalState> | ((prev: CompressorGlobalState) => CompressorGlobalState)
+) {
+  if (typeof update === "function") {
+    globalCompressorState = update(globalCompressorState);
+  } else {
+    globalCompressorState = { ...globalCompressorState, ...update };
+  }
+  compressorListeners.forEach((l) => {
+    try {
+      l(globalCompressorState);
+    } catch (e) {
+      console.error(e);
+    }
+  });
+}
+
+let compressorUnlisten: UnlistenFn | null = null;
+
+async function setupCompressorEventListener() {
+  if (compressorUnlisten) return;
+  try {
+    compressorUnlisten = await listen<CompressionProgress>("compression-progress", (event) => {
+      const payload = event.payload;
+      setGlobalCompressorState((prev) => {
+        const nextIds = new Set(prev.processingIds);
+        if (payload.stage === "done") {
+          nextIds.delete(payload.cache_id);
+          return {
+            activeProgress: payload,
+            processingIds: nextIds,
+          };
+        } else {
+          nextIds.add(payload.cache_id);
+          return {
+            activeProgress: payload,
+            processingIds: nextIds,
+          };
+        }
+      });
+
+      if (payload.stage === "done") {
+        setTimeout(() => {
+          setGlobalCompressorState((prev) => ({
+            ...prev,
+            activeProgress: prev.activeProgress?.cache_id === payload.cache_id ? null : prev.activeProgress,
+          }));
+        }, 3000);
+      }
+    });
+  } catch (err) {
+    console.error("Failed to setup compression progress listener:", err);
+  }
+}
+
+setupCompressorEventListener().catch(console.error);
+
+export function useCompressor() {
+  const [state, setState] = useState<CompressorGlobalState>(globalCompressorState);
+
+  useEffect(() => {
+    compressorListeners.add(setState);
+    return () => {
+      compressorListeners.delete(setState);
+    };
+  }, []);
+
+  return state;
+}
+
+export async function compressShaderCache(params: {
+  sourcePath: string;
+  gameId?: string | null;
+  gameName: string;
+  cacheId: string;
+  algorithm: CompressionAlgorithm;
+}): Promise<CompressedVaultEntry> {
+  setGlobalCompressorState((prev) => {
+    const nextIds = new Set(prev.processingIds);
+    nextIds.add(params.cacheId);
+    return { ...prev, processingIds: nextIds };
+  });
+
+  try {
+    const result = await invoke<CompressedVaultEntry>("compress_shader_cache", {
+      sourcePath: params.sourcePath,
+      gameId: params.gameId ?? null,
+      gameName: params.gameName,
+      cacheId: params.cacheId,
+      algorithm: params.algorithm,
+    });
+    return result;
+  } catch (err) {
+    setGlobalCompressorState((prev) => ({
+      ...prev,
+      activeProgress: null,
+    }));
+    throw err;
+  } finally {
+    setGlobalCompressorState((prev) => {
+      const nextIds = new Set(prev.processingIds);
+      nextIds.delete(params.cacheId);
+      return { ...prev, processingIds: nextIds };
+    });
+  }
+}
+
+export async function decompressShaderCache(vaultId: string, cacheId?: string): Promise<void> {
+  if (cacheId) {
+    setGlobalCompressorState((prev) => {
+      const nextIds = new Set(prev.processingIds);
+      nextIds.add(cacheId);
+      return { ...prev, processingIds: nextIds };
+    });
+  }
+
+  try {
+    await invoke("decompress_shader_cache", { vaultId });
+  } catch (err) {
+    setGlobalCompressorState((prev) => ({
+      ...prev,
+      activeProgress: null,
+    }));
+    throw err;
+  } finally {
+    if (cacheId) {
+      setGlobalCompressorState((prev) => {
+        const nextIds = new Set(prev.processingIds);
+        nextIds.delete(cacheId);
+        return { ...prev, processingIds: nextIds };
+      });
+    }
+  }
+}
+
+export async function getVaultEntries(): Promise<CompressedVaultEntry[]> {
+  return invoke<CompressedVaultEntry[]>("get_vault_entries");
+}
+
+export async function deleteVaultEntry(vaultId: string): Promise<void> {
+  return invoke("delete_vault_entry", { vaultId });
+}
+
+export async function openVaultFolder(): Promise<void> {
+  return invoke("open_vault_folder");
+}
+
 

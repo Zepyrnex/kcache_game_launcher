@@ -5,7 +5,7 @@
 ## Download
 
 Download the latest installer for Windows 10/11:
-- [**Download Kcache v0.1.0 (Windows Installer .exe)**](https://github.com/Zepyrnex/kcache_game_launcher/releases/download/v0.1.0/Kcache_0.1.0_x64-setup.exe)
+- [**Download Kcache v0.1.1 (Windows Installer .exe)**](https://github.com/Zepyrnex/kcache_game_launcher/releases/download/v0.1.1/Kcache_0.1.1_x64-setup.exe)
 - [View all Releases](https://github.com/Zepyrnex/kcache_game_launcher/releases)
 
 ---
@@ -13,6 +13,9 @@ Download the latest installer for Windows 10/11:
 ## Features
 
 - **GPU Shader Cache Management**: Automatically detects and manages shader caches across NVIDIA (DX, GL, NV_Cache), AMD, DirectX, and Vulkan.
+- **Shader Compressor & Vault**: Compress shader caches using Zstandard (Zstd) for high compression ratios or LZ4 for fast decompression speed.
+- **Pre-Launch Auto Decompression**: Automatically restores compressed shaders back to driver folders before launching games to prevent stutter.
+- **Background Compression**: Live progress bar with streaming file writes that persists in the background across tab switches.
 - **Game Library Scanner**: Detects installed games across Steam, Epic Games Store, and custom install directories.
 - **Total Storage Breakdown**: Calculates and displays full disk space consumed by game install files and related shader caches.
 - **Playtime Tracker**: Built-in background playtime monitor (0% CPU idle, <50 KB RAM) that tracks session and lifetime playtime.
@@ -24,7 +27,7 @@ Download the latest installer for Windows 10/11:
 ## Tech Stack
 
 - **Frontend**: React 18, TypeScript, Tailwind CSS, Vite, Lucide React
-- **Backend**: Rust, Tauri v2, SQLite (bundled via `rusqlite`), Tokio
+- **Backend**: Rust, Tauri v2, SQLite (bundled via `rusqlite`), Tokio, Zstandard, LZ4
 - **Installer**: NSIS (Nullsoft Scriptable Install System)
 
 ---
@@ -53,3 +56,4 @@ npm run tauri dev
 # Build frontend and generate Windows NSIS installer
 npm run tauri build -- --bundles nsis
 ```
+

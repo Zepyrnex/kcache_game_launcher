@@ -1,6 +1,7 @@
 use crate::types::*;
 use crate::db::{Database, TrashRecord};
 use crate::backup::{backup_paths, restore_archive, make_archive_path};
+use crate::compressor::{compress_shader_target, decompress_shader_target, get_vault_directory};
 use crate::matcher::Matcher;
 use crate::scanners::CacheScanner;
 use crate::scanners::gpu_drivers::{NvidiaScanner, AmdScanner, IntelScanner};
@@ -779,6 +780,23 @@ pub async fn launch_game(
         (g, p)
     };
 
+    {
+        let db = state.db.lock().map_err(|_| AppError::Other("DB lock poisoned".into()))?;
+        if let Ok(entries) = db.get_vault_entries_for_game(&game_id) {
+            for entry in entries {
+                if entry.status == "compressed" {
+                    let comp_path = PathBuf::from(&entry.compressed_path);
+                    let orig_path = PathBuf::from(&entry.original_path);
+                    if let Err(e) = decompress_shader_target(&app, &comp_path, &orig_path, &entry.algorithm, &entry.cache_id, &entry.game_name) {
+                        error!("[Launcher] Auto-decompress failed for {}: {:?}", comp_path.display(), e);
+                    } else {
+                        let _ = db.update_vault_entry_status(&entry.id, "decompressed");
+                    }
+                }
+            }
+        }
+    }
+
     let mut launched_child: Option<std::process::Child> = None;
     let mut exe_filename: Option<String> = None;
 
@@ -1330,4 +1348,108 @@ pub fn deduplicate_games(games: &mut Vec<DetectedGame>) {
         true
     });
 }
+
+#[tauri::command]
+pub async fn compress_shader_cache(
+    app: AppHandle,
+    source_path: String,
+    game_id: Option<String>,
+    game_name: String,
+    cache_id: String,
+    algorithm: CompressionAlgorithm,
+    state: State<'_, AppState>,
+) -> Result<CompressedVaultEntry, AppError> {
+    let p = PathBuf::from(&source_path);
+    let app_clone = app.clone();
+    let gid = game_id.clone();
+    let gname = game_name.clone();
+    let cid = cache_id.clone();
+    let entry = tokio::task::spawn_blocking(move || {
+        compress_shader_target(&app_clone, &p, gid, &gname, &cid, algorithm)
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("Compression thread error: {e}")))??;
+
+    {
+        let db = state.db.lock().map_err(|_| AppError::Other("DB lock poisoned".into()))?;
+        db.insert_vault_entry(&entry)?;
+    }
+    Ok(entry)
+}
+
+#[tauri::command]
+pub async fn decompress_shader_cache(
+    app: AppHandle,
+    vault_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), AppError> {
+    let vault_entry = {
+        let db = state.db.lock().map_err(|_| AppError::Other("DB lock poisoned".into()))?;
+        db.get_vault_entry_by_id(&vault_id)?
+            .ok_or_else(|| AppError::Other(format!("Vault entry #{vault_id} not found")))?
+    };
+
+    let comp_path = PathBuf::from(&vault_entry.compressed_path);
+    let orig_path = PathBuf::from(&vault_entry.original_path);
+    let app_clone = app.clone();
+    let algo = vault_entry.algorithm.clone();
+    let cid = vault_entry.cache_id.clone();
+    let gname = vault_entry.game_name.clone();
+
+    tokio::task::spawn_blocking(move || {
+        decompress_shader_target(&app_clone, &comp_path, &orig_path, &algo, &cid, &gname)
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("Decompression thread error: {e}")))??;
+
+    {
+        let db = state.db.lock().map_err(|_| AppError::Other("DB lock poisoned".into()))?;
+        db.update_vault_entry_status(&vault_id, "decompressed")?;
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_vault_entries(
+    state: State<'_, AppState>,
+) -> Result<Vec<CompressedVaultEntry>, AppError> {
+    let db = state.db.lock().map_err(|_| AppError::Other("DB lock poisoned".into()))?;
+    Ok(db.get_all_vault_entries()?)
+}
+
+#[tauri::command]
+pub async fn delete_vault_entry(
+    vault_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), AppError> {
+    let entry = {
+        let db = state.db.lock().map_err(|_| AppError::Other("DB lock poisoned".into()))?;
+        db.get_vault_entry_by_id(&vault_id)?
+    };
+    if let Some(e) = entry {
+        let comp_path = PathBuf::from(&e.compressed_path);
+        if comp_path.exists() {
+            let _ = std::fs::remove_file(&comp_path);
+        }
+        let db = state.db.lock().map_err(|_| AppError::Other("DB lock poisoned".into()))?;
+        db.delete_vault_entry(&vault_id)?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn open_vault_folder() -> Result<(), AppError> {
+    let dir = get_vault_directory();
+    std::fs::create_dir_all(&dir)?;
+    #[cfg(windows)]
+    {
+        std::process::Command::new("explorer")
+            .arg(&dir)
+            .spawn()
+            .map_err(|e| AppError::Other(format!("Failed to open folder: {e}")))?;
+    }
+    Ok(())
+}
+
 
