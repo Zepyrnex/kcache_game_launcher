@@ -1,12 +1,11 @@
-use crate::types::{DetectedGame, GamePlatform};
 use crate::libraries::GameLibrary;
-use std::path::PathBuf;
+use crate::types::{DetectedGame, GamePlatform};
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 pub struct SteamLibrary;
 
 impl SteamLibrary {
-
     pub fn get_library_paths() -> Vec<PathBuf> {
         let mut paths = Vec::new();
 
@@ -58,7 +57,8 @@ impl SteamLibrary {
         {
             use winreg::enums::HKEY_CURRENT_USER;
             use winreg::RegKey;
-            if let Ok(hkcu) = RegKey::predef(HKEY_CURRENT_USER).open_subkey(r"Software\Valve\Steam") {
+            if let Ok(hkcu) = RegKey::predef(HKEY_CURRENT_USER).open_subkey(r"Software\Valve\Steam")
+            {
                 if let Ok(path) = hkcu.get_value::<String, _>("SteamPath") {
                     candidates.push(PathBuf::from(path.replace('/', "\\")));
                 }
@@ -141,7 +141,10 @@ impl GameLibrary for SteamLibrary {
                 let fields = Self::parse_acf(&content);
 
                 let app_id = fields.get("appid").cloned().unwrap_or_default();
-                let game_name = fields.get("name").cloned().unwrap_or_else(|| "Unknown".into());
+                let game_name = fields
+                    .get("name")
+                    .cloned()
+                    .unwrap_or_else(|| "Unknown".into());
                 let install_dir_name = fields.get("installdir").cloned().unwrap_or_default();
                 let last_played: Option<i64> = fields
                     .get("lastplayed")

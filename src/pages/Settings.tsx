@@ -1,7 +1,6 @@
 import { useState, useEffect } from "react";
 import {
   Palette,
-  Shield,
   Database,
   Key,
   RefreshCw,
@@ -14,7 +13,6 @@ import {
 import {
   getSettings,
   setSetting,
-  getEverythingStatus,
   detectSteamId,
   syncSteamWebApi,
   getScanFolders,
@@ -24,12 +22,11 @@ import {
   getExcludedGames,
   restoreGame,
 } from "../hooks/useScanner";
-import { EverythingStatus, ScanFolder, ExcludedGame } from "../types";
+import { ScanFolder, ExcludedGame } from "../types";
 import { open } from "@tauri-apps/plugin-dialog";
 
 export function Settings() {
   const [settings, setSettings] = useState<Record<string, string>>({});
-  const [everythingStatus, setEverythingStatus] = useState<EverythingStatus | null>(null);
 
   const [steamApiKey, setSteamApiKey] = useState("");
   const [steamId, setSteamId] = useState("");
@@ -48,7 +45,6 @@ export function Settings() {
       setSteamApiKey(s.steam_api_key ?? "");
       setSteamId(s.steam_id ?? "");
     });
-    getEverythingStatus().then(setEverythingStatus);
     loadScanFolders();
     loadExcludedGames();
   }, []);
@@ -387,50 +383,6 @@ export function Settings() {
             </select>
           </div>
         </div>
-      </section>
-
-      <section className="glass-card p-5 space-y-4">
-        <div className="flex items-center gap-3">
-          <Shield size={16} className="text-accent-400" />
-          <h2 className="font-semibold text-gray-200">Everything (MFT) Integration</h2>
-        </div>
-        {everythingStatus ? (
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <p className="text-sm text-gray-300">Status</p>
-              <span
-                className={`badge ${
-                  everythingStatus.http_available
-                    ? "bg-green-900/40 text-green-400 border-green-900/40"
-                    : everythingStatus.installed
-                    ? "bg-amber-900/40 text-amber-400 border-amber-900/40"
-                    : "bg-surface-700 text-gray-500 border-white/5"
-                }`}
-              >
-                {everythingStatus.http_available
-                  ? "✓ Active (MFT Indexed)"
-                  : everythingStatus.installed
-                  ? "⚠ Installed (HTTP Server Off)"
-                  : "Not installed"}
-              </span>
-            </div>
-            {everythingStatus.installed && !everythingStatus.http_available && (
-              <div className="p-3 rounded-lg bg-amber-900/15 border border-amber-900/30 text-xs text-amber-400">
-                Everything is installed but its HTTP server is disabled.
-                Enable it via: <span className="font-mono">Everything → Tools → Options → HTTP Server</span>.
-                This enables millisecond MFT folder scanning and full-system DXVK cache discovery.
-              </div>
-            )}
-            {!everythingStatus.installed && (
-              <p className="text-xs text-gray-500">
-                Install <strong className="text-gray-300">Everything by voidtools</strong> (free) to enable instant
-                MFT-powered executable detection and full-system cache discovery across all drives.
-              </p>
-            )}
-          </div>
-        ) : (
-          <div className="skeleton h-16 rounded-lg" />
-        )}
       </section>
     </div>
   );

@@ -1,8 +1,8 @@
-use crate::types::{DetectedGame, GamePlatform};
 use crate::libraries::GameLibrary;
-use std::path::PathBuf;
+use crate::types::{DetectedGame, GamePlatform};
+use log::{debug, info, warn};
 use serde::Deserialize;
-use log::{info, debug, warn};
+use std::path::PathBuf;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
@@ -21,9 +21,7 @@ pub struct EpicLibrary;
 
 impl EpicLibrary {
     fn manifests_dir() -> PathBuf {
-        PathBuf::from(
-            r"C:\ProgramData\Epic\EpicGamesLauncher\Data\Manifests"
-        )
+        PathBuf::from(r"C:\ProgramData\Epic\EpicGamesLauncher\Data\Manifests")
     }
 }
 
@@ -35,7 +33,10 @@ impl GameLibrary for EpicLibrary {
     fn detect(&self) -> Vec<DetectedGame> {
         let manifests_dir = Self::manifests_dir();
         if !manifests_dir.exists() {
-            debug!("[Epic] Manifests dir not found: {}", manifests_dir.display());
+            debug!(
+                "[Epic] Manifests dir not found: {}",
+                manifests_dir.display()
+            );
             return vec![];
         }
 
@@ -87,15 +88,26 @@ impl GameLibrary for EpicLibrary {
                 continue;
             }
 
-            if manifest.launch_executable.as_deref().map(|e| e.is_empty()).unwrap_or(false) {
+            if manifest
+                .launch_executable
+                .as_deref()
+                .map(|e| e.is_empty())
+                .unwrap_or(false)
+            {
                 debug!("[Epic] Skipping (no launch executable): {name}");
             }
 
             debug!("[Epic] Found: {name} at {install_path}");
 
-            let exe_path = manifest.launch_executable
+            let exe_path = manifest
+                .launch_executable
                 .filter(|e| !e.is_empty())
-                .map(|e| std::path::Path::new(&install_path).join(e).to_string_lossy().to_string());
+                .map(|e| {
+                    std::path::Path::new(&install_path)
+                        .join(e)
+                        .to_string_lossy()
+                        .to_string()
+                });
 
             games.push(DetectedGame {
                 id: format!("epic_{app_name}"),

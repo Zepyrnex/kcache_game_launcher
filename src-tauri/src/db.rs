@@ -1,7 +1,10 @@
-use rusqlite::{Connection, Result, OptionalExtension, params};
-use crate::types::{CacheEntry, CacheSource, DetectedGame, GamePlatform, BackupRecord, ScanFolder, CompressedVaultEntry, CompressionAlgorithm};
-use std::path::PathBuf;
+use crate::types::{
+    BackupRecord, CacheEntry, CacheSource, CompressedVaultEntry, CompressionAlgorithm,
+    DetectedGame, GamePlatform, ScanFolder,
+};
 use log::info;
+use rusqlite::{params, Connection, OptionalExtension, Result};
+use std::path::PathBuf;
 
 pub struct Database {
     conn: Connection,
@@ -22,7 +25,8 @@ impl Database {
         self.conn.execute_batch("PRAGMA journal_mode=WAL;")?;
         self.conn.execute_batch("PRAGMA foreign_keys=ON;")?;
 
-        self.conn.execute_batch(r#"
+        self.conn.execute_batch(
+            r#"
             CREATE TABLE IF NOT EXISTS games (
                 id          TEXT PRIMARY KEY,
                 name        TEXT NOT NULL,
@@ -122,21 +126,100 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_excluded_games ON excluded_games(id);
             CREATE INDEX IF NOT EXISTS idx_vault_game ON compressed_vault_entries(game_id);
             CREATE INDEX IF NOT EXISTS idx_vault_cache ON compressed_vault_entries(cache_id);
-        "#)?;
+        "#,
+        )?;
 
-        let _ = self.conn.execute("ALTER TABLE games ADD COLUMN exe_path TEXT NOT NULL DEFAULT ''", []);
-        let _ = self.conn.execute("ALTER TABLE games ADD COLUMN cover_url TEXT NOT NULL DEFAULT ''", []);
-        let _ = self.conn.execute("ALTER TABLE games ADD COLUMN hero_url TEXT NOT NULL DEFAULT ''", []);
-        let _ = self.conn.execute("ALTER TABLE games ADD COLUMN logo_url TEXT NOT NULL DEFAULT ''", []);
-        let _ = self.conn.execute("ALTER TABLE games ADD COLUMN description TEXT NOT NULL DEFAULT ''", []);
-        let _ = self.conn.execute("ALTER TABLE games ADD COLUMN genres TEXT NOT NULL DEFAULT '[]'", []);
-        let _ = self.conn.execute("ALTER TABLE games ADD COLUMN developer TEXT NOT NULL DEFAULT ''", []);
-        let _ = self.conn.execute("ALTER TABLE games ADD COLUMN publisher TEXT NOT NULL DEFAULT ''", []);
-        let _ = self.conn.execute("ALTER TABLE games ADD COLUMN release_date TEXT NOT NULL DEFAULT ''", []);
-        let _ = self.conn.execute("ALTER TABLE games ADD COLUMN playtime_seconds INTEGER NOT NULL DEFAULT 0", []);
-        let _ = self.conn.execute("ALTER TABLE games ADD COLUMN install_size_bytes INTEGER NOT NULL DEFAULT 0", []);
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);",
+        )?;
 
-        self.conn.execute_batch(r#"
+        let has_version_row: bool = self
+            .conn
+            .query_row("SELECT 1 FROM schema_version LIMIT 1", [], |_| Ok(true))
+            .unwrap_or(false);
+
+        if !has_version_row {
+            self.conn
+                .execute("INSERT INTO schema_version (version) VALUES (0)", [])?;
+        }
+
+        let current_version: i32 =
+            self.conn
+                .query_row("SELECT version FROM schema_version LIMIT 1", [], |row| {
+                    row.get(0)
+                })?;
+
+        let existing_columns: std::collections::HashSet<String> = {
+            let mut stmt = self.conn.prepare("PRAGMA table_info(games)")?;
+            let names = stmt
+                .query_map([], |row| row.get::<_, String>(1))?
+                .flatten()
+                .collect();
+            names
+        };
+
+        if current_version < 1 {
+            let tx = self.conn.unchecked_transaction()?;
+
+            let columns_to_add = [
+                (
+                    "exe_path",
+                    "ALTER TABLE games ADD COLUMN exe_path TEXT NOT NULL DEFAULT ''",
+                ),
+                (
+                    "cover_url",
+                    "ALTER TABLE games ADD COLUMN cover_url TEXT NOT NULL DEFAULT ''",
+                ),
+                (
+                    "hero_url",
+                    "ALTER TABLE games ADD COLUMN hero_url TEXT NOT NULL DEFAULT ''",
+                ),
+                (
+                    "logo_url",
+                    "ALTER TABLE games ADD COLUMN logo_url TEXT NOT NULL DEFAULT ''",
+                ),
+                (
+                    "description",
+                    "ALTER TABLE games ADD COLUMN description TEXT NOT NULL DEFAULT ''",
+                ),
+                (
+                    "genres",
+                    "ALTER TABLE games ADD COLUMN genres TEXT NOT NULL DEFAULT '[]'",
+                ),
+                (
+                    "developer",
+                    "ALTER TABLE games ADD COLUMN developer TEXT NOT NULL DEFAULT ''",
+                ),
+                (
+                    "publisher",
+                    "ALTER TABLE games ADD COLUMN publisher TEXT NOT NULL DEFAULT ''",
+                ),
+                (
+                    "release_date",
+                    "ALTER TABLE games ADD COLUMN release_date TEXT NOT NULL DEFAULT ''",
+                ),
+                (
+                    "playtime_seconds",
+                    "ALTER TABLE games ADD COLUMN playtime_seconds INTEGER NOT NULL DEFAULT 0",
+                ),
+                (
+                    "install_size_bytes",
+                    "ALTER TABLE games ADD COLUMN install_size_bytes INTEGER NOT NULL DEFAULT 0",
+                ),
+            ];
+
+            for (col_name, sql) in columns_to_add {
+                if !existing_columns.contains(col_name) {
+                    tx.execute(sql, [])?;
+                }
+            }
+
+            tx.execute("UPDATE schema_version SET version = 1", [])?;
+            tx.commit()?;
+        }
+
+        self.conn.execute_batch(
+            r#"
             INSERT OR IGNORE INTO settings(key, value) VALUES
                 ('theme', 'dark'),
                 ('accent_color', '#7C3AED'),
@@ -146,7 +229,8 @@ impl Database {
                 ('launcher_layout', 'grid'),
                 ('excluded_paths', '[]'),
                 ('excluded_game_ids', '[]');
-        "#)?;
+        "#,
+        )?;
 
         let _ = self.conn.execute_batch(r#"
             DELETE FROM games WHERE rowid NOT IN (
@@ -159,6 +243,26 @@ impl Database {
                     END
             );
         "#);
+
+        let old_key: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'steam_api_key'",
+                [],
+                |row| row.get(0),
+            )
+            .ok();
+
+        if let Some(key) = old_key {
+            let trimmed = key.trim();
+            if !trimmed.is_empty() {
+                let _ = crate::utils::set_steam_api_key(trimmed);
+            }
+            let _ = self.conn.execute(
+                "UPDATE settings SET value = '' WHERE key = 'steam_api_key'",
+                [],
+            );
+        }
 
         info!("[DB] Schema initialized");
         Ok(())
@@ -223,53 +327,86 @@ impl Database {
                       playtime_seconds, install_size_bytes
                FROM games ORDER BY name"#
         )?;
-        let games = stmt.query_map([], |row| {
-            let platform_str: String = row.get(2)?;
-            let platform = match platform_str.as_str() {
-                "Steam" => GamePlatform::Steam,
-                "Epic" => GamePlatform::Epic,
-                "Gog" => GamePlatform::Gog,
-                "Xbox" => GamePlatform::Xbox,
-                "Custom" => GamePlatform::Custom,
-                _ => GamePlatform::Unknown,
-            };
-            let exe_path_raw: String = row.get(4)?;
-            let cover_raw: String = row.get(8)?;
-            let hero_raw: String = row.get(9)?;
-            let logo_raw: String = row.get(10)?;
-            let desc_raw: String = row.get(11)?;
-            let genres_raw: String = row.get(12)?;
-            let dev_raw: String = row.get(13)?;
-            let pub_raw: String = row.get(14)?;
-            let rel_raw: String = row.get(15)?;
-            let playtime: u64 = row.get::<_, Option<u64>>(16)?.unwrap_or(0);
-            let install_size: u64 = row.get::<_, Option<u64>>(17)?.unwrap_or(0);
+        let games = stmt
+            .query_map([], |row| {
+                let platform_str: String = row.get(2)?;
+                let platform = match platform_str.as_str() {
+                    "Steam" => GamePlatform::Steam,
+                    "Epic" => GamePlatform::Epic,
+                    "Gog" => GamePlatform::Gog,
+                    "Xbox" => GamePlatform::Xbox,
+                    "Custom" => GamePlatform::Custom,
+                    _ => GamePlatform::Unknown,
+                };
+                let exe_path_raw: String = row.get(4)?;
+                let cover_raw: String = row.get(8)?;
+                let hero_raw: String = row.get(9)?;
+                let logo_raw: String = row.get(10)?;
+                let desc_raw: String = row.get(11)?;
+                let genres_raw: String = row.get(12)?;
+                let dev_raw: String = row.get(13)?;
+                let pub_raw: String = row.get(14)?;
+                let rel_raw: String = row.get(15)?;
+                let playtime: u64 = row.get::<_, Option<u64>>(16)?.unwrap_or(0);
+                let install_size: u64 = row.get::<_, Option<u64>>(17)?.unwrap_or(0);
 
-            let genres: Vec<String> = serde_json::from_str(&genres_raw).unwrap_or_default();
+                let genres: Vec<String> = serde_json::from_str(&genres_raw).unwrap_or_default();
 
-            Ok(DetectedGame {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                platform,
-                install_path: row.get(3)?,
-                exe_path: if exe_path_raw.is_empty() { None } else { Some(exe_path_raw) },
-                app_id: row.get(5)?,
-                last_played: row.get(6)?,
-                icon_url: row.get(7)?,
-                cover_url: if cover_raw.is_empty() { None } else { Some(cover_raw) },
-                hero_url: if hero_raw.is_empty() { None } else { Some(hero_raw) },
-                logo_url: if logo_raw.is_empty() { None } else { Some(logo_raw) },
-                description: if desc_raw.is_empty() { None } else { Some(desc_raw) },
-                genres,
-                developer: if dev_raw.is_empty() { None } else { Some(dev_raw) },
-                publisher: if pub_raw.is_empty() { None } else { Some(pub_raw) },
-                release_date: if rel_raw.is_empty() { None } else { Some(rel_raw) },
-                playtime_seconds: playtime,
-                install_size_bytes: install_size,
-            })
-        })?
-        .flatten()
-        .collect();
+                Ok(DetectedGame {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    platform,
+                    install_path: row.get(3)?,
+                    exe_path: if exe_path_raw.is_empty() {
+                        None
+                    } else {
+                        Some(exe_path_raw)
+                    },
+                    app_id: row.get(5)?,
+                    last_played: row.get(6)?,
+                    icon_url: row.get(7)?,
+                    cover_url: if cover_raw.is_empty() {
+                        None
+                    } else {
+                        Some(cover_raw)
+                    },
+                    hero_url: if hero_raw.is_empty() {
+                        None
+                    } else {
+                        Some(hero_raw)
+                    },
+                    logo_url: if logo_raw.is_empty() {
+                        None
+                    } else {
+                        Some(logo_raw)
+                    },
+                    description: if desc_raw.is_empty() {
+                        None
+                    } else {
+                        Some(desc_raw)
+                    },
+                    genres,
+                    developer: if dev_raw.is_empty() {
+                        None
+                    } else {
+                        Some(dev_raw)
+                    },
+                    publisher: if pub_raw.is_empty() {
+                        None
+                    } else {
+                        Some(pub_raw)
+                    },
+                    release_date: if rel_raw.is_empty() {
+                        None
+                    } else {
+                        Some(rel_raw)
+                    },
+                    playtime_seconds: playtime,
+                    install_size_bytes: install_size,
+                })
+            })?
+            .flatten()
+            .collect();
         Ok(games)
     }
 
@@ -310,18 +447,50 @@ impl Database {
                 name: row.get(1)?,
                 platform,
                 install_path: row.get(3)?,
-                exe_path: if exe_path_raw.is_empty() { None } else { Some(exe_path_raw) },
+                exe_path: if exe_path_raw.is_empty() {
+                    None
+                } else {
+                    Some(exe_path_raw)
+                },
                 app_id: row.get(5)?,
                 last_played: row.get(6)?,
                 icon_url: row.get(7)?,
-                cover_url: if cover_raw.is_empty() { None } else { Some(cover_raw) },
-                hero_url: if hero_raw.is_empty() { None } else { Some(hero_raw) },
-                logo_url: if logo_raw.is_empty() { None } else { Some(logo_raw) },
-                description: if desc_raw.is_empty() { None } else { Some(desc_raw) },
+                cover_url: if cover_raw.is_empty() {
+                    None
+                } else {
+                    Some(cover_raw)
+                },
+                hero_url: if hero_raw.is_empty() {
+                    None
+                } else {
+                    Some(hero_raw)
+                },
+                logo_url: if logo_raw.is_empty() {
+                    None
+                } else {
+                    Some(logo_raw)
+                },
+                description: if desc_raw.is_empty() {
+                    None
+                } else {
+                    Some(desc_raw)
+                },
                 genres,
-                developer: if dev_raw.is_empty() { None } else { Some(dev_raw) },
-                publisher: if pub_raw.is_empty() { None } else { Some(pub_raw) },
-                release_date: if rel_raw.is_empty() { None } else { Some(rel_raw) },
+                developer: if dev_raw.is_empty() {
+                    None
+                } else {
+                    Some(dev_raw)
+                },
+                publisher: if pub_raw.is_empty() {
+                    None
+                } else {
+                    Some(pub_raw)
+                },
+                release_date: if rel_raw.is_empty() {
+                    None
+                } else {
+                    Some(rel_raw)
+                },
                 playtime_seconds: playtime,
                 install_size_bytes: install_size,
             }))
@@ -330,18 +499,27 @@ impl Database {
         }
     }
 
-    pub fn add_game_playtime(&self, id: &str, additional_seconds: u64, last_played: i64) -> Result<u64> {
+    pub fn add_game_playtime(
+        &self,
+        id: &str,
+        additional_seconds: u64,
+        last_played: i64,
+    ) -> Result<u64> {
         self.conn.execute(
             "UPDATE games SET playtime_seconds = playtime_seconds + ?1, last_played = ?2, updated_at = strftime('%s','now') WHERE id = ?3",
             params![additional_seconds, last_played, id],
         )?;
-        let mut stmt = self.conn.prepare("SELECT playtime_seconds FROM games WHERE id = ?1")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT playtime_seconds FROM games WHERE id = ?1")?;
         let total: u64 = stmt.query_row(params![id], |row| row.get(0)).unwrap_or(0);
         Ok(total)
     }
 
     pub fn get_game_playtime(&self, id: &str) -> Result<u64> {
-        let mut stmt = self.conn.prepare("SELECT playtime_seconds FROM games WHERE id = ?1")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT playtime_seconds FROM games WHERE id = ?1")?;
         let total: u64 = stmt.query_row(params![id], |row| row.get(0)).unwrap_or(0);
         Ok(total)
     }
@@ -355,8 +533,11 @@ impl Database {
     }
 
     pub fn delete_game(&self, id: &str) -> Result<()> {
-        let _ = self.conn.execute("DELETE FROM cache_entries WHERE game_id = ?1", params![id]);
-        self.conn.execute("DELETE FROM games WHERE id = ?1", params![id])?;
+        let _ = self
+            .conn
+            .execute("DELETE FROM cache_entries WHERE game_id = ?1", params![id]);
+        self.conn
+            .execute("DELETE FROM games WHERE id = ?1", params![id])?;
         Ok(())
     }
 
@@ -384,16 +565,38 @@ impl Database {
     ) -> Result<()> {
         let existing = self.get_game_by_id(id)?;
         if let Some(mut game) = existing {
-            if let Some(n) = name { if !n.is_empty() { game.name = n.to_string(); } }
-            if let Some(a) = app_id { game.app_id = Some(a.to_string()); }
-            if let Some(c) = cover_url { game.cover_url = Some(c.to_string()); }
-            if let Some(h) = hero_url { game.hero_url = Some(h.to_string()); }
-            if let Some(l) = logo_url { game.logo_url = Some(l.to_string()); }
-            if let Some(d) = description { game.description = Some(d.to_string()); }
-            if let Some(g) = genres { game.genres = g.to_vec(); }
-            if let Some(dev) = developer { game.developer = Some(dev.to_string()); }
-            if let Some(publ) = publisher { game.publisher = Some(publ.to_string()); }
-            if let Some(rel) = release_date { game.release_date = Some(rel.to_string()); }
+            if let Some(n) = name {
+                if !n.is_empty() {
+                    game.name = n.to_string();
+                }
+            }
+            if let Some(a) = app_id {
+                game.app_id = Some(a.to_string());
+            }
+            if let Some(c) = cover_url {
+                game.cover_url = Some(c.to_string());
+            }
+            if let Some(h) = hero_url {
+                game.hero_url = Some(h.to_string());
+            }
+            if let Some(l) = logo_url {
+                game.logo_url = Some(l.to_string());
+            }
+            if let Some(d) = description {
+                game.description = Some(d.to_string());
+            }
+            if let Some(g) = genres {
+                game.genres = g.to_vec();
+            }
+            if let Some(dev) = developer {
+                game.developer = Some(dev.to_string());
+            }
+            if let Some(publ) = publisher {
+                game.publisher = Some(publ.to_string());
+            }
+            if let Some(rel) = release_date {
+                game.release_date = Some(rel.to_string());
+            }
 
             self.upsert_game(&game)?;
         }
@@ -414,18 +617,21 @@ impl Database {
     }
 
     pub fn get_scan_folders(&self) -> Result<Vec<ScanFolder>> {
-        let mut stmt = self.conn.prepare("SELECT id, path, enabled, created_at FROM scan_folders ORDER BY id ASC")?;
-        let folders = stmt.query_map([], |row| {
-            let enabled_int: i64 = row.get(2)?;
-            Ok(ScanFolder {
-                id: row.get(0)?,
-                path: row.get(1)?,
-                enabled: enabled_int == 1,
-                created_at: row.get(3)?,
-            })
-        })?
-        .flatten()
-        .collect();
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, path, enabled, created_at FROM scan_folders ORDER BY id ASC")?;
+        let folders = stmt
+            .query_map([], |row| {
+                let enabled_int: i64 = row.get(2)?;
+                Ok(ScanFolder {
+                    id: row.get(0)?,
+                    path: row.get(1)?,
+                    enabled: enabled_int == 1,
+                    created_at: row.get(3)?,
+                })
+            })?
+            .flatten()
+            .collect();
         Ok(folders)
     }
 
@@ -434,7 +640,9 @@ impl Database {
             "INSERT OR IGNORE INTO scan_folders(path, enabled) VALUES(?1, 1)",
             params![path],
         )?;
-        let mut stmt = self.conn.prepare("SELECT id, path, enabled, created_at FROM scan_folders WHERE path = ?1")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, path, enabled, created_at FROM scan_folders WHERE path = ?1")?;
         stmt.query_row(params![path], |row| {
             let enabled_int: i64 = row.get(2)?;
             Ok(ScanFolder {
@@ -447,7 +655,8 @@ impl Database {
     }
 
     pub fn remove_scan_folder(&self, id: i64) -> Result<()> {
-        self.conn.execute("DELETE FROM scan_folders WHERE id = ?1", params![id])?;
+        self.conn
+            .execute("DELETE FROM scan_folders WHERE id = ?1", params![id])?;
         Ok(())
     }
 
@@ -460,7 +669,9 @@ impl Database {
     }
 
     pub fn get_cached_metadata(&self, app_id: &str) -> Result<Option<String>> {
-        let mut stmt = self.conn.prepare("SELECT data_json FROM game_metadata_cache WHERE app_id = ?1")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT data_json FROM game_metadata_cache WHERE app_id = ?1")?;
         let mut rows = stmt.query(params![app_id])?;
         if let Some(row) = rows.next()? {
             Ok(Some(row.get(0)?))
@@ -509,25 +720,27 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT id, game_id, source, path, size_bytes, last_modified, confidence FROM cache_entries WHERE game_id=?1"
         )?;
-        let entries = stmt.query_map([game_id], |row| {
-            Ok(CacheEntry {
-                id: row.get(0)?,
-                associated_game_id: row.get(1)?,
-                source: CacheSource::Unknown,
-                path: row.get(3)?,
-                size_bytes: row.get::<_, i64>(4)? as u64,
-                last_modified: row.get(5)?,
-                associated_game_guess: None,
-                confidence: row.get::<_, f64>(6)? as f32,
-            })
-        })?
-        .flatten()
-        .collect();
+        let entries = stmt
+            .query_map([game_id], |row| {
+                Ok(CacheEntry {
+                    id: row.get(0)?,
+                    associated_game_id: row.get(1)?,
+                    source: CacheSource::Unknown,
+                    path: row.get(3)?,
+                    size_bytes: row.get::<_, i64>(4)? as u64,
+                    last_modified: row.get(5)?,
+                    associated_game_guess: None,
+                    confidence: row.get::<_, f64>(6)? as f32,
+                })
+            })?
+            .flatten()
+            .collect();
         Ok(entries)
     }
 
     pub fn delete_cache_entry_by_path(&self, path: &str) -> Result<()> {
-        self.conn.execute("DELETE FROM cache_entries WHERE path=?1", [path])?;
+        self.conn
+            .execute("DELETE FROM cache_entries WHERE path=?1", [path])?;
         Ok(())
     }
 
@@ -549,23 +762,25 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT id, original_path, trash_path, game_id, game_name, deleted_at FROM trash ORDER BY deleted_at DESC"
         )?;
-        let items = stmt.query_map([], |row| {
-            Ok(TrashRecord {
-                id: row.get(0)?,
-                original_path: row.get(1)?,
-                trash_path: row.get(2)?,
-                game_id: row.get(3)?,
-                game_name: row.get(4)?,
-                deleted_at: row.get(5)?,
-            })
-        })?
-        .flatten()
-        .collect();
+        let items = stmt
+            .query_map([], |row| {
+                Ok(TrashRecord {
+                    id: row.get(0)?,
+                    original_path: row.get(1)?,
+                    trash_path: row.get(2)?,
+                    game_id: row.get(3)?,
+                    game_name: row.get(4)?,
+                    deleted_at: row.get(5)?,
+                })
+            })?
+            .flatten()
+            .collect();
         Ok(items)
     }
 
     pub fn remove_from_trash(&self, trash_id: i64) -> Result<()> {
-        self.conn.execute("DELETE FROM trash WHERE id=?1", [trash_id])?;
+        self.conn
+            .execute("DELETE FROM trash WHERE id=?1", [trash_id])?;
         Ok(())
     }
 
@@ -589,39 +804,53 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT id, game_id, game_name, archive_path, created_at, size_bytes, notes, original_paths FROM backups WHERE game_id=?1 ORDER BY created_at DESC"
         )?;
-        let records = stmt.query_map([game_id], |row| {
-            let paths_json: String = row.get(7)?;
-            let original_paths: Vec<String> = serde_json::from_str(&paths_json).unwrap_or_default();
-            Ok(BackupRecord {
-                id: row.get(0)?,
-                game_id: row.get(1)?,
-                game_name: row.get(2)?,
-                archive_path: row.get(3)?,
-                created_at: row.get(4)?,
-                size_bytes: row.get::<_, i64>(5)? as u64,
-                notes: row.get(6)?,
-                original_paths,
-            })
-        })?
-        .flatten()
-        .collect();
+        let records = stmt
+            .query_map([game_id], |row| {
+                let paths_json: String = row.get(7)?;
+                let original_paths: Vec<String> =
+                    serde_json::from_str(&paths_json).unwrap_or_default();
+                Ok(BackupRecord {
+                    id: row.get(0)?,
+                    game_id: row.get(1)?,
+                    game_name: row.get(2)?,
+                    archive_path: row.get(3)?,
+                    created_at: row.get(4)?,
+                    size_bytes: row.get::<_, i64>(5)? as u64,
+                    notes: row.get(6)?,
+                    original_paths,
+                })
+            })?
+            .flatten()
+            .collect();
         Ok(records)
     }
 
     pub fn delete_backup(&self, backup_id: i64) -> Result<()> {
-        self.conn.execute("DELETE FROM backups WHERE id=?1", [backup_id])?;
+        self.conn
+            .execute("DELETE FROM backups WHERE id=?1", [backup_id])?;
         Ok(())
     }
 
     pub fn get_setting(&self, key: &str) -> Result<Option<String>> {
-        self.conn.query_row(
-            "SELECT value FROM settings WHERE key=?1",
-            [key],
-            |row| row.get(0),
-        ).optional()
+        if key == "steam_api_key" {
+            return Ok(crate::utils::get_steam_api_key());
+        }
+        self.conn
+            .query_row("SELECT value FROM settings WHERE key=?1", [key], |row| {
+                row.get(0)
+            })
+            .optional()
     }
 
     pub fn set_setting(&self, key: &str, value: &str) -> Result<()> {
+        if key == "steam_api_key" {
+            let _ = crate::utils::set_steam_api_key(value);
+            let _ = self.conn.execute(
+                "UPDATE settings SET value = '' WHERE key = 'steam_api_key'",
+                [],
+            );
+            return Ok(());
+        }
         self.conn.execute(
             "INSERT INTO settings(key, value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             params![key, value],
@@ -631,9 +860,17 @@ impl Database {
 
     pub fn get_all_settings(&self) -> Result<std::collections::HashMap<String, String>> {
         let mut stmt = self.conn.prepare("SELECT key, value FROM settings")?;
-        let map = stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
+        let mut map: std::collections::HashMap<String, String> = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
             .flatten()
             .collect();
+        if let Some(key) = crate::utils::get_steam_api_key() {
+            map.insert("steam_api_key".to_string(), key);
+        } else {
+            map.insert("steam_api_key".to_string(), String::new());
+        }
         Ok(map)
     }
 
@@ -669,27 +906,39 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, platform, app_id, exe_path, excluded_at FROM excluded_games ORDER BY excluded_at DESC"
         )?;
-        let items = stmt.query_map([], |row| {
-            let app_id_raw: String = row.get(3)?;
-            let exe_raw: String = row.get(4)?;
-            Ok(ExcludedGame {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                platform: row.get(2)?,
-                app_id: if app_id_raw.is_empty() { None } else { Some(app_id_raw) },
-                exe_path: if exe_raw.is_empty() { None } else { Some(exe_raw) },
-                excluded_at: row.get(5)?,
-            })
-        })?
-        .flatten()
-        .collect();
+        let items = stmt
+            .query_map([], |row| {
+                let app_id_raw: String = row.get(3)?;
+                let exe_raw: String = row.get(4)?;
+                Ok(ExcludedGame {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    platform: row.get(2)?,
+                    app_id: if app_id_raw.is_empty() {
+                        None
+                    } else {
+                        Some(app_id_raw)
+                    },
+                    exe_path: if exe_raw.is_empty() {
+                        None
+                    } else {
+                        Some(exe_raw)
+                    },
+                    excluded_at: row.get(5)?,
+                })
+            })?
+            .flatten()
+            .collect();
         Ok(items)
     }
 
     pub fn get_excluded_game_ids(&self) -> Result<std::collections::HashSet<String>> {
         let mut set = std::collections::HashSet::new();
 
-        if let Ok(mut stmt) = self.conn.prepare("SELECT id, app_id, exe_path FROM excluded_games") {
+        if let Ok(mut stmt) = self
+            .conn
+            .prepare("SELECT id, app_id, exe_path FROM excluded_games")
+        {
             if let Ok(rows) = stmt.query_map([], |row| {
                 let id: String = row.get(0)?;
                 let app_id: String = row.get(1).unwrap_or_default();
@@ -720,7 +969,10 @@ impl Database {
     }
 
     pub fn restore_excluded_game(&self, id: &str) -> Result<()> {
-        self.conn.execute("DELETE FROM excluded_games WHERE id = ?1 OR app_id = ?1", params![id])?;
+        self.conn.execute(
+            "DELETE FROM excluded_games WHERE id = ?1 OR app_id = ?1",
+            params![id],
+        )?;
 
         let mut current_ids = self.get_excluded_game_ids()?;
         current_ids.remove(id);
@@ -928,4 +1180,39 @@ pub struct ExcludedGame {
     pub app_id: Option<String>,
     pub exe_path: Option<String>,
     pub excluded_at: i64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_schema_version_and_migration() {
+        let temp_dir = std::env::temp_dir().join("kcache_db_test");
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let db_path = temp_dir.join(format!("test_{}.db", uuid::Uuid::new_v4()));
+
+        let db = Database::open(&db_path).expect("failed to open test db");
+        let version: i32 = db
+            .conn
+            .query_row("SELECT version FROM schema_version LIMIT 1", [], |r| {
+                r.get(0)
+            })
+            .expect("query schema_version");
+        assert_eq!(version, 1);
+
+        assert!(db.initialize().is_ok());
+
+        let version_after: i32 = db
+            .conn
+            .query_row("SELECT version FROM schema_version LIMIT 1", [], |r| {
+                r.get(0)
+            })
+            .expect("query schema_version after second init");
+        assert_eq!(version_after, 1);
+
+        drop(db);
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_dir(&temp_dir);
+    }
 }

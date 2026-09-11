@@ -1,17 +1,13 @@
 use crate::types::{AppError, AppResult};
-use crate::utils::{validate_path_allowed, is_path_locked};
-use std::path::{Path, PathBuf};
-use std::io::{BufReader, BufWriter};
-use std::fs;
+use crate::utils::{is_path_locked, validate_path_allowed};
 use chrono::Utc;
 use log::{info, warn};
+use std::fs;
+use std::io::{BufReader, BufWriter};
+use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
-pub fn backup_paths(
-    paths: &[PathBuf],
-    archive_path: &PathBuf,
-) -> AppResult<u64> {
-
+pub fn backup_paths(paths: &[PathBuf], archive_path: &PathBuf) -> AppResult<u64> {
     for p in paths {
         validate_path_allowed(p)?;
         if is_path_locked(p) {
@@ -37,17 +33,12 @@ pub fn backup_paths(
                 .unwrap_or("cache_file");
             tar.append_path_with_name(source_path, name)?;
         } else if source_path.is_dir() {
-
             let _dir_name = source_path
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("cache");
 
-            for entry in WalkDir::new(source_path)
-                .min_depth(1)
-                .into_iter()
-                .flatten()
-            {
+            for entry in WalkDir::new(source_path).min_depth(1).into_iter().flatten() {
                 if entry.path().is_file() {
                     let relative = entry
                         .path()
@@ -63,7 +54,11 @@ pub fn backup_paths(
     encoder.finish()?;
 
     let archive_size = archive_path.metadata()?.len();
-    info!("[backup] Created archive: {} ({} bytes)", archive_path.display(), archive_size);
+    info!(
+        "[backup] Created archive: {} ({} bytes)",
+        archive_path.display(),
+        archive_size
+    );
     Ok(archive_size)
 }
 
@@ -86,12 +81,17 @@ pub fn restore_archive(archive_path: &Path, restore_root: &Path) -> AppResult<Ve
 
     for entry in archive.entries()? {
         let mut entry = entry?;
-        let path = restore_root.join(entry.path()?);
-
-        if !path.starts_with(restore_root) {
-            warn!("[restore] Skipping path outside restore root: {}", path.display());
-            continue;
-        }
+        let rel_path = entry.path()?;
+        let path = match crate::utils::safe_extract_path(restore_root, &rel_path) {
+            Some(p) => p,
+            None => {
+                warn!(
+                    "[restore] Skipping unsafe path traversal entry: {}",
+                    rel_path.display()
+                );
+                continue;
+            }
+        };
 
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;

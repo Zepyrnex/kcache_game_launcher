@@ -1,8 +1,8 @@
 use crate::types::{CacheEntry, CacheSource, DetectedGame, GameCacheGroup};
-use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
-use std::collections::HashMap;
+use fuzzy_matcher::FuzzyMatcher;
 use log::debug;
+use std::collections::HashMap;
 
 const MATCH_THRESHOLD: f32 = 0.50;
 
@@ -22,15 +22,13 @@ impl Matcher {
         games: &[DetectedGame],
         caches: &mut Vec<CacheEntry>,
     ) -> (Vec<GameCacheGroup>, Vec<CacheEntry>) {
-
         let appid_map: HashMap<&str, &DetectedGame> = games
             .iter()
             .filter_map(|g| g.app_id.as_deref().map(|id| (id, g)))
             .collect();
 
         for cache in caches.iter_mut() {
-            let (game_id, game_name, confidence) =
-                self.match_cache(cache, games, &appid_map);
+            let (game_id, game_name, confidence) = self.match_cache(cache, games, &appid_map);
             cache.associated_game_id = game_id;
             cache.associated_game_guess = game_name;
             cache.confidence = confidence;
@@ -83,9 +81,11 @@ impl Matcher {
 
         if cache.source == CacheSource::SteamShaderPrecache {
             if let Some(app_id) = &cache.associated_game_id {
-
                 if let Some(game) = appid_map.get(app_id.as_str()) {
-                    debug!("[Matcher] Steam exact match: {} → {}", cache.path, game.name);
+                    debug!(
+                        "[Matcher] Steam exact match: {} → {}",
+                        cache.path, game.name
+                    );
                     return (Some(game.id.clone()), Some(game.name.clone()), 1.0);
                 }
             }
@@ -126,7 +126,6 @@ impl Matcher {
         }
 
         if let Some(game) = best_game {
-
             let confidence = (best_score as f32 / 200.0).clamp(0.0, 0.95);
             debug!(
                 "[Matcher] Fuzzy match: '{}' → '{}' (score={}, confidence={:.2})",
@@ -144,5 +143,116 @@ impl Matcher {
 impl Default for Matcher {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_matcher_steam_exact_match() {
+        let matcher = Matcher::new();
+        let games = vec![DetectedGame {
+            id: "steam_480".to_string(),
+            name: "Spacewar".to_string(),
+            platform: crate::types::GamePlatform::Steam,
+            install_path: "C:\\Games\\Spacewar".to_string(),
+            exe_path: None,
+            app_id: Some("480".to_string()),
+            last_played: None,
+            icon_url: None,
+            cover_url: None,
+            hero_url: None,
+            logo_url: None,
+            description: None,
+            genres: vec![],
+            developer: None,
+            publisher: None,
+            release_date: None,
+            playtime_seconds: 0,
+            install_size_bytes: 0,
+        }];
+
+        let mut caches = vec![CacheEntry {
+            id: "c1".to_string(),
+            source: CacheSource::SteamShaderPrecache,
+            path: "C:\\Steam\\steamapps\\shadercache\\480".to_string(),
+            size_bytes: 1024,
+            last_modified: 0,
+            associated_game_id: Some("480".to_string()),
+            associated_game_guess: None,
+            confidence: 0.0,
+        }];
+
+        let (groups, unmatched) = matcher.associate(&games, &mut caches);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].game.id, "steam_480");
+        assert_eq!(groups[0].caches.len(), 1);
+        assert_eq!(groups[0].caches[0].confidence, 1.0);
+        assert!(unmatched.is_empty());
+    }
+
+    #[test]
+    fn test_matcher_path_containment() {
+        let matcher = Matcher::new();
+        let games = vec![DetectedGame {
+            id: "epic_1".to_string(),
+            name: "CyberGame".to_string(),
+            platform: crate::types::GamePlatform::Epic,
+            install_path: "C:\\Games\\CyberGame".to_string(),
+            exe_path: None,
+            app_id: None,
+            last_played: None,
+            icon_url: None,
+            cover_url: None,
+            hero_url: None,
+            logo_url: None,
+            description: None,
+            genres: vec![],
+            developer: None,
+            publisher: None,
+            release_date: None,
+            playtime_seconds: 0,
+            install_size_bytes: 0,
+        }];
+
+        let mut caches = vec![CacheEntry {
+            id: "c2".to_string(),
+            source: CacheSource::Dxvk,
+            path: "C:\\Games\\CyberGame\\CyberGame.dxvk-cache".to_string(),
+            size_bytes: 2048,
+            last_modified: 0,
+            associated_game_id: None,
+            associated_game_guess: None,
+            confidence: 0.0,
+        }];
+
+        let (groups, unmatched) = matcher.associate(&games, &mut caches);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].game.id, "epic_1");
+        assert_eq!(groups[0].caches.len(), 1);
+        assert_eq!(groups[0].caches[0].confidence, 0.85);
+        assert!(unmatched.is_empty());
+    }
+
+    #[test]
+    fn test_matcher_unmatched() {
+        let matcher = Matcher::new();
+        let games = vec![];
+        let mut caches = vec![CacheEntry {
+            id: "c3".to_string(),
+            source: CacheSource::Unknown,
+            path: "C:\\Random\\Path".to_string(),
+            size_bytes: 512,
+            last_modified: 0,
+            associated_game_id: None,
+            associated_game_guess: None,
+            confidence: 0.0,
+        }];
+
+        let (groups, unmatched) = matcher.associate(&games, &mut caches);
+        assert!(groups.is_empty());
+        assert_eq!(unmatched.len(), 1);
     }
 }

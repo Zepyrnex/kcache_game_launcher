@@ -1,14 +1,13 @@
-use std::path::{Path, PathBuf};
-use walkdir::WalkDir;
-use log::{info, debug};
-use crate::types::DiscoveredProgram;
 use crate::everything::EverythingClient;
 use crate::steam_api::SteamApiClient;
+use crate::types::DiscoveredProgram;
+use log::{debug, info};
+use std::path::{Path, PathBuf};
+use walkdir::WalkDir;
 
 pub struct ExeScanner;
 
 impl ExeScanner {
-
     pub fn scan_folders(
         folders: &[PathBuf],
         everything: Option<&EverythingClient>,
@@ -28,7 +27,11 @@ impl ExeScanner {
                     info!("[ExeScanner] MFT scan found {} raw .exe items via Everything in {folder_str}", items.len());
                     for item in items {
                         if !item.is_folder && Self::is_game_executable(&item.full_path) {
-                            if let Some(program) = Self::build_program_info(&item.full_path, item.size_bytes, item.last_modified_unix()) {
+                            if let Some(program) = Self::build_program_info(
+                                &item.full_path,
+                                item.size_bytes,
+                                item.last_modified_unix(),
+                            ) {
                                 discovered.push(program);
                             }
                         }
@@ -45,13 +48,20 @@ impl ExeScanner {
         }
 
         discovered.sort_by(|a, b| a.exe_path.to_lowercase().cmp(&b.exe_path.to_lowercase()));
-        discovered.dedup_by(|a, b| a.exe_path.replace('/', "\\").eq_ignore_ascii_case(&b.exe_path.replace('/', "\\")));
+        discovered.dedup_by(|a, b| {
+            a.exe_path
+                .replace('/', "\\")
+                .eq_ignore_ascii_case(&b.exe_path.replace('/', "\\"))
+        });
 
         discovered = Self::deduplicate_by_game_folder(discovered);
 
         Self::auto_match_steam_metadata(&mut discovered);
 
-        info!("[ExeScanner] Scan complete: {} game programs discovered", discovered.len());
+        info!(
+            "[ExeScanner] Scan complete: {} game programs discovered",
+            discovered.len()
+        );
         discovered
     }
 
@@ -78,7 +88,8 @@ impl ExeScanner {
                     if ext.eq_ignore_ascii_case("exe") && Self::is_game_executable(path) {
                         if let Ok(meta) = entry.metadata() {
                             let size = meta.len();
-                            let mtime = meta.modified()
+                            let mtime = meta
+                                .modified()
                                 .ok()
                                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                                 .map(|d| d.as_secs() as i64)
@@ -124,7 +135,8 @@ impl ExeScanner {
     }
 
     fn is_game_executable(path: &Path) -> bool {
-        let file_stem = path.file_stem()
+        let file_stem = path
+            .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("")
             .to_lowercase();
@@ -179,7 +191,11 @@ impl ExeScanner {
         true
     }
 
-    fn build_program_info(path: &Path, size_bytes: u64, last_modified: i64) -> Option<DiscoveredProgram> {
+    fn build_program_info(
+        path: &Path,
+        size_bytes: u64,
+        last_modified: i64,
+    ) -> Option<DiscoveredProgram> {
         let file_stem = path.file_stem()?.to_string_lossy().to_string();
         let folder_path = path.parent()?.to_string_lossy().to_string();
 
@@ -198,22 +214,24 @@ impl ExeScanner {
     }
 
     fn clean_game_name(file_stem: &str, path: &Path) -> String {
-
         let is_generic = matches!(
             file_stem.to_lowercase().as_str(),
             "game" | "launcher" | "play" | "start" | "app" | "main" | "client"
         );
 
         let base_name = if is_generic {
-
             let mut cur = path.parent();
             let mut candidate = file_stem.to_string();
             while let Some(parent) = cur {
-                let name = parent.file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("");
+                let name = parent.file_name().and_then(|n| n.to_str()).unwrap_or("");
                 let lower = name.to_lowercase();
-                if lower != "bin" && lower != "binaries" && lower != "win64" && lower != "x64" && lower != "x86" && !lower.is_empty() {
+                if lower != "bin"
+                    && lower != "binaries"
+                    && lower != "win64"
+                    && lower != "x64"
+                    && lower != "x86"
+                    && !lower.is_empty()
+                {
                     candidate = name.to_string();
                     break;
                 }
@@ -283,7 +301,6 @@ impl ExeScanner {
             if progs.len() == 1 {
                 result.push(progs.remove(0));
             } else {
-
                 progs.sort_by_key(|p| {
                     let exe_p = PathBuf::from(&p.exe_path);
                     Self::score_executable(&exe_p, p.size_bytes, &root)
@@ -303,11 +320,23 @@ impl ExeScanner {
         let mut cur = exe_path.parent();
         let mut root = cur.map(PathBuf::from).unwrap_or_default();
         while let Some(parent) = cur {
-            let name = parent.file_name()
+            let name = parent
+                .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("")
                 .to_lowercase();
-            if matches!(name.as_str(), "bin" | "binaries" | "win64" | "win32" | "x64" | "x86" | "retail" | "release" | "game") {
+            if matches!(
+                name.as_str(),
+                "bin"
+                    | "binaries"
+                    | "win64"
+                    | "win32"
+                    | "x64"
+                    | "x86"
+                    | "retail"
+                    | "release"
+                    | "game"
+            ) {
                 if let Some(grandparent) = parent.parent() {
                     root = grandparent.to_path_buf();
                 }
@@ -319,10 +348,20 @@ impl ExeScanner {
 
     fn score_executable(path: &Path, size_bytes: u64, root: &Path) -> i64 {
         let mut score: i64 = 0;
-        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
-        let root_name = root.file_name().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        let root_name = root
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_lowercase();
 
-        if !root_name.is_empty() && (stem == root_name || stem.contains(&root_name) || root_name.contains(&stem)) {
+        if !root_name.is_empty()
+            && (stem == root_name || stem.contains(&root_name) || root_name.contains(&stem))
+        {
             score += 100;
         }
 
@@ -338,7 +377,10 @@ impl ExeScanner {
             score -= 30;
         }
 
-        if matches!(stem.as_str(), "launcher" | "play" | "start" | "crashreportclient" | "redprelauncher") {
+        if matches!(
+            stem.as_str(),
+            "launcher" | "play" | "start" | "crashreportclient" | "redprelauncher"
+        ) {
             score -= 40;
         }
 

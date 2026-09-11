@@ -1,6 +1,6 @@
+use crate::scanners::CacheScanner;
 use crate::types::{CacheEntry, CacheSource};
 use crate::utils::scan_dir;
-use crate::scanners::CacheScanner;
 use dirs::data_local_dir;
 
 pub struct NvidiaScanner;

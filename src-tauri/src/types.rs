@@ -295,8 +295,13 @@ impl serde::Serialize for AppError {
             message: String,
         }
         let (code, message) = match self {
-            AppError::FileLocked(p) => ("FILE_LOCKED", format!("File is locked by another process: {p}")),
-            AppError::PathNotAllowed(p) => ("PATH_NOT_ALLOWED", format!("Path not in allowlist: {p}")),
+            AppError::FileLocked(p) => (
+                "FILE_LOCKED",
+                format!("File is locked by another process: {p}"),
+            ),
+            AppError::PathNotAllowed(p) => {
+                ("PATH_NOT_ALLOWED", format!("Path not in allowlist: {p}"))
+            }
             AppError::BackupNotFound(id) => ("BACKUP_NOT_FOUND", format!("Backup #{id} not found")),
             _ => ("ERROR", self.to_string()),
         };
@@ -305,3 +310,38 @@ impl serde::Serialize for AppError {
 }
 
 pub type AppResult<T> = Result<T, AppError>;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GameStorageStat {
+    pub id: String,
+    pub name: String,
+    pub platform: String,
+    pub cover_url: Option<String>,
+    pub hero_url: Option<String>,
+    pub icon_url: Option<String>,
+    pub install_size_bytes: u64,
+    pub cache_size_bytes: u64,
+    pub total_size_bytes: u64,
+    pub playtime_seconds: u64,
+    pub last_played: Option<i64>,
+    pub is_installed: bool,
+    pub install_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LibraryStatistics {
+    pub total_games: usize,
+    pub installed_games: usize,
+    pub not_installed_games: usize,
+    pub played_games: usize,
+    pub not_played_games: usize,
+    pub total_playtime_seconds: u64,
+    pub average_playtime_seconds: u64,
+    pub total_install_size_bytes: u64,
+    pub total_shader_cache_size_bytes: u64,
+    pub total_backup_size_bytes: u64,
+    pub total_storage_used_bytes: u64,
+    pub platform_counts: std::collections::HashMap<String, usize>,
+    pub top_played_games: Vec<GameStorageStat>,
+    pub all_games: Vec<GameStorageStat>,
+}

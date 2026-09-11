@@ -1,11 +1,18 @@
 # Kcache
 
+## Team Pineapple
+- Ganapati(Team Leader)
+- Harsha Vardhan
+- Dhanush
+- Samyank
+- Mohammed Khuddus
+
 **Kcache** is a GPU shader cache manager and game launcher built for PC gamers. It scans, monitors, and optimizes shader cache files across GPU vendors while providing a game launcher with total storage tracking and playtime monitoring.
 
 ## Download
 
 Download the latest installer for Windows 10/11:
-- [**Download Kcache v0.1.2 (Windows Installer .exe)**](https://github.com/Zepyrnex/kcache_game_launcher/releases/download/v0.1.2/Kcache_0.1.2_x64-setup.exe)
+- [**Download Kcache v0.1.3 (Windows Installer .exe)**](https://github.com/Zepyrnex/kcache_game_launcher/releases/download/v0.1.3/Kcache_0.1.3_x64-setup.exe)
 - [View all Releases](https://github.com/Zepyrnex/kcache_game_launcher/releases)
 
 ---
@@ -15,7 +22,7 @@ Download the latest installer for Windows 10/11:
 - **GPU Shader Cache Management**: Automatically detects and manages shader caches across NVIDIA (DX, GL, NV_Cache), AMD, DirectX, and Vulkan.
 - **Shader Compressor & Vault**: Compress shader caches using Zstandard (Zstd) for high compression ratios or LZ4 for fast decompression speed.
 - **Pre-Launch Auto Decompression**: Automatically restores compressed shaders back to driver folders before launching games to prevent stutter.
-- **Game Save Manager**: Detects local PC game saves via Ludusavi manifest path rules, resolves environment variables (%USERPROFILE%, %APPDATA%), and archives selected saves to timestamped .zip packages with real-time progress.
+- **Game Save Manager**: Detects local PC game saves across Steam, CPY, RUNE, CODEX, Goldberg, and Windows game folders with Steam metadata comparison, direct open folder shortcuts, and background timestamped .zip backup archiving.
 - **Background Compression**: Live progress bar with streaming file writes that persists in the background across tab switches.
 - **Game Library Scanner**: Detects installed games across Steam, Epic Games Store, and custom install directories.
 - **Total Storage Breakdown**: Calculates and displays full disk space consumed by game install files and related shader caches.

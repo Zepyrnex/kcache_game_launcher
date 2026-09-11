@@ -481,7 +481,7 @@ export function LibraryScannerDialog({ existingGames = [], onClose, onAdded }: P
                 className="btn-accent text-xs font-semibold"
               >
                 <Zap size={14} className={scanning ? "animate-spin" : ""} />
-                {scanning ? "Scanning MFT…" : "Scan Folders Now"}
+                {scanning ? "Scanning…" : "Scan Folders Now"}
               </button>
             ) : (
               <button

@@ -1,7 +1,6 @@
-
-use std::path::PathBuf;
+use log::{debug, info, warn};
 use serde::Deserialize;
-use log::{info, warn, debug};
+use std::path::PathBuf;
 
 #[derive(Debug, Deserialize)]
 struct EverythingHttpResponse {
@@ -13,7 +12,6 @@ struct EverythingHttpResponse {
 
 #[derive(Debug, Deserialize)]
 struct EverythingResult {
-
     #[serde(default)]
     path: String,
 
@@ -90,7 +88,7 @@ impl EverythingClient {
         let url = format!(
             "{}?s={}&json=1&count={}&path_column=1&size_column=1&date_modified_column=1",
             self.api_url(),
-            urlencoding(query),
+            urlencoding::encode(query),
             max_results
         );
 
@@ -102,7 +100,12 @@ impl EverythingClient {
         }
 
         let body: EverythingHttpResponse = resp.json().ok()?;
-        debug!("[Everything] '{}' → {} results (total: {})", query, body.results.len(), body.totalresults);
+        debug!(
+            "[Everything] '{}' → {} results (total: {})",
+            query,
+            body.results.len(),
+            body.totalresults
+        );
 
         let items = body
             .results
@@ -136,12 +139,10 @@ impl EverythingClient {
     }
 
     pub fn find_shadercache_folders(&self) -> Option<Vec<FoundItem>> {
-
         self.search("folder:shadercache", 2000)
     }
 
     pub fn find_nvidia_caches(&self) -> Option<Vec<FoundItem>> {
-
         self.search(r"path:NVIDIA\DXCache | path:NVIDIA\GLCache", 200)
     }
 
@@ -153,7 +154,12 @@ impl EverythingClient {
         self.search(r"path:Intel\ShaderCache", 200)
     }
 
-    pub fn find_in_path(&self, path_prefix: &str, extension: &str, max: u32) -> Option<Vec<FoundItem>> {
+    pub fn find_in_path(
+        &self,
+        path_prefix: &str,
+        extension: &str,
+        max: u32,
+    ) -> Option<Vec<FoundItem>> {
         let query = format!("path:\"{path_prefix}\" ext:{extension}");
         self.search(&query, max)
     }
@@ -180,9 +186,7 @@ pub struct FoundItem {
 }
 
 impl FoundItem {
-
     pub fn last_modified_unix(&self) -> i64 {
-
         if let Ok(ts) = self.date_modified_raw.parse::<i64>() {
             return ts;
         }
@@ -200,13 +204,16 @@ impl FoundItem {
 pub fn find_everything_install() -> Option<PathBuf> {
     #[cfg(windows)]
     {
-        use winreg::enums::{HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER};
+        use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
         use winreg::RegKey;
 
         for (hive, key) in &[
             (HKEY_CURRENT_USER, r"Software\voidtools\Everything"),
             (HKEY_LOCAL_MACHINE, r"Software\voidtools\Everything"),
-            (HKEY_LOCAL_MACHINE, r"Software\WOW6432Node\voidtools\Everything"),
+            (
+                HKEY_LOCAL_MACHINE,
+                r"Software\WOW6432Node\voidtools\Everything",
+            ),
         ] {
             if let Ok(reg) = RegKey::predef(*hive).open_subkey(key) {
                 if let Ok(path) = reg.get_value::<String, _>("Installation Folder") {
@@ -228,10 +235,9 @@ pub fn find_everything_http_port() -> Option<u16> {
         use winreg::enums::HKEY_CURRENT_USER;
         use winreg::RegKey;
 
-        if let Ok(reg) = RegKey::predef(HKEY_CURRENT_USER)
-            .open_subkey(r"Software\voidtools\Everything\Settings")
+        if let Ok(reg) =
+            RegKey::predef(HKEY_CURRENT_USER).open_subkey(r"Software\voidtools\Everything\Settings")
         {
-
             let enabled: u32 = reg.get_value("http_server_enabled").unwrap_or(0);
             if enabled == 1 {
                 let port: u32 = reg.get_value("http_server_port").unwrap_or(80);
@@ -249,24 +255,13 @@ pub fn make_client_from_install() -> Option<EverythingClient> {
     if client.is_available() {
         Some(client)
     } else {
-        warn!("[Everything] Installed at {} but HTTP API not reachable on port {port}. \
-               User may need to enable: Tools → Options → HTTP Server.", install.display());
+        warn!(
+            "[Everything] Installed at {} but HTTP API not reachable on port {port}. \
+               User may need to enable: Tools → Options → HTTP Server.",
+            install.display()
+        );
         None
     }
-}
-
-fn urlencoding(s: &str) -> String {
-    s.chars()
-        .flat_map(|c| match c {
-            ' ' => vec!['%', '2', '0'],
-            '&' => vec!['%', '2', '6'],
-            '=' => vec!['%', '3', 'D'],
-            '"' => vec!['%', '2', '2'],
-            '|' => vec!['%', '7', 'C'],
-            '\\' => vec!['%', '5', 'C'],
-            c => vec![c],
-        })
-        .collect()
 }
 
 #[cfg(test)]
@@ -275,8 +270,8 @@ mod tests {
 
     #[test]
     fn test_url_encoding() {
-        assert_eq!(urlencoding("hello world"), "hello%20world");
-        assert_eq!(urlencoding("ext:dxvk-cache"), "ext:dxvk-cache");
+        assert_eq!(urlencoding::encode("hello world"), "hello%20world");
+        assert_eq!(urlencoding::encode("ext:dxvk-cache"), "ext%3Adxvk-cache");
     }
 
     #[test]

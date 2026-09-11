@@ -1,27 +1,36 @@
+#![allow(
+    clippy::too_many_arguments,
+    clippy::collapsible_str_replace,
+    clippy::collapsible_if,
+    clippy::unnecessary_sort_by,
+    clippy::ptr_arg,
+    clippy::manual_flatten,
+    clippy::upper_case_acronyms,
+    clippy::unnecessary_unwrap
+)]
+
+pub mod backup;
+pub mod commands;
+pub mod compressor;
+pub mod db;
+pub mod everything;
+pub mod libraries;
+pub mod matcher;
+pub mod save_manager;
+pub mod scanners;
+pub mod steam_api;
 pub mod types;
 pub mod utils;
-pub mod db;
-pub mod backup;
-pub mod compressor;
-pub mod matcher;
-pub mod everything;
-pub mod commands;
-pub mod scanners;
-pub mod libraries;
-pub mod steam_api;
-pub mod save_manager;
 
 use commands::AppState;
 use db::Database;
+use log::info;
 use std::sync::Mutex;
 use tauri::Manager;
-use log::info;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    env_logger::Builder::from_env(
-        env_logger::Env::default().default_filter_or("info")
-    ).init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     info!("Kcache starting…");
 
@@ -31,7 +40,8 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
-            let app_dir = app.path()
+            let app_dir = app
+                .path()
                 .app_data_dir()
                 .expect("Failed to get app data dir");
             let _ = std::fs::create_dir_all(&app_dir);
@@ -46,7 +56,11 @@ pub fn run() {
                     ];
                     for old in &candidates {
                         if old.exists() {
-                            info!("Migrating database from {} to {}", old.display(), db_path.display());
+                            info!(
+                                "Migrating database from {} to {}",
+                                old.display(),
+                                db_path.display()
+                            );
                             let _ = std::fs::copy(old, &db_path);
                             break;
                         }
@@ -56,12 +70,11 @@ pub fn run() {
 
             info!("Opening database at {}", db_path.display());
 
-            let db = Database::open(&db_path)
-                .expect("Failed to open/initialize database");
+            let db = Database::open(&db_path).expect("Failed to open/initialize database");
 
             app.manage(AppState {
                 db: Mutex::new(db),
-                active_session: Mutex::new(None),
+                active_session: Mutex::new(std::collections::HashMap::new()),
             });
 
             Ok(())
@@ -77,7 +90,6 @@ pub fn run() {
             commands::get_settings,
             commands::set_setting,
             commands::get_everything_status,
-
             commands::get_scan_folders,
             commands::add_scan_folder,
             commands::remove_scan_folder,
@@ -102,10 +114,12 @@ pub fn run() {
             commands::get_vault_entries,
             commands::delete_vault_entry,
             commands::open_vault_folder,
+            commands::get_library_statistics,
             save_manager::detect_saves,
             save_manager::backup_saves,
+            save_manager::open_save_folder,
+            save_manager::open_backup_folder,
         ])
         .run(tauri::generate_context!())
         .expect("Error while running Kcache");
 }
-

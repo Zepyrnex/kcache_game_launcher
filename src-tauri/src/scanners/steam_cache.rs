@@ -1,8 +1,8 @@
-use crate::types::{CacheEntry, CacheSource};
 use crate::scanners::CacheScanner;
+use crate::types::{CacheEntry, CacheSource};
 use crate::utils::dir_size_and_mtime;
-use uuid::Uuid;
 use std::path::PathBuf;
+use uuid::Uuid;
 
 pub struct SteamCacheScanner {
     pub steam_libraries: Vec<PathBuf>,

@@ -5,7 +5,7 @@ pub trait CacheScanner: Send + Sync {
     fn scan(&self) -> Vec<CacheEntry>;
 }
 
-pub mod gpu_drivers;
-pub mod steam_cache;
 pub mod dxvk;
 pub mod exe_scanner;
+pub mod gpu_drivers;
+pub mod steam_cache;

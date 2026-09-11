@@ -1,6 +1,6 @@
-pub mod steam;
 pub mod epic;
 pub mod gog;
+pub mod steam;
 
 use crate::types::DetectedGame;
 

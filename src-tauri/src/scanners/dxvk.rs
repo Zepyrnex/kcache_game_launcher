@@ -1,13 +1,12 @@
-use crate::types::{CacheEntry, CacheSource};
+use crate::everything::{make_client_from_install, EverythingClient};
 use crate::scanners::CacheScanner;
-use crate::everything::{EverythingClient, make_client_from_install};
-use uuid::Uuid;
-use std::path::PathBuf;
-use walkdir::WalkDir;
+use crate::types::{CacheEntry, CacheSource};
 use log::info;
+use std::path::PathBuf;
+use uuid::Uuid;
+use walkdir::WalkDir;
 
 pub struct DxvkScanner {
-
     pub game_install_dirs: Vec<PathBuf>,
 }
 
@@ -17,7 +16,6 @@ impl CacheScanner for DxvkScanner {
     }
 
     fn scan(&self) -> Vec<CacheEntry> {
-
         if let Some(client) = make_client_from_install() {
             info!("[DxvkScanner] Using Everything HTTP API for full-system DXVK scan");
             if let Some(entries) = self.scan_via_everything(&client) {
@@ -25,7 +23,10 @@ impl CacheScanner for DxvkScanner {
             }
         }
 
-        info!("[DxvkScanner] Falling back to walkdir-based scan ({} known dirs)", self.game_install_dirs.len());
+        info!(
+            "[DxvkScanner] Falling back to walkdir-based scan ({} known dirs)",
+            self.game_install_dirs.len()
+        );
         self.scan_via_walkdir()
     }
 }
@@ -100,10 +101,7 @@ impl DxvkScanner {
                     continue;
                 }
 
-                let fname = path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("");
+                let fname = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
                 let source = if fname.ends_with(".dxvk-cache") {
                     CacheSource::Dxvk

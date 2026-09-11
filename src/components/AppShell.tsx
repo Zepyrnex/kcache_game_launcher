@@ -7,11 +7,10 @@ import {
   Gamepad2,
   Layers,
   Sparkles,
-  Zap,
   CheckCircle2,
-  Cpu,
   FolderArchive,
   Save,
+  BarChart3,
 } from "lucide-react";
 import clsx from "clsx";
 
@@ -22,6 +21,7 @@ const NAV_ITEMS = [
   { to: "/trash", label: "Trash", icon: Trash2 },
   { to: "/compressor", label: "Compressor", icon: FolderArchive },
   { to: "/saves", label: "Save Manager", icon: Save },
+  { to: "/statistics", label: "Statistics", icon: BarChart3 },
   { to: "/settings", label: "Settings", icon: Settings },
 ];
 
@@ -172,19 +172,6 @@ export function AppShell() {
                   </button>
                 );
               })}
-            </div>
-          </div>
-
-          <div className="pt-2 border-t border-white/5">
-            <div className="p-3 rounded-xl bg-surface-950/60 border border-white/5 space-y-2">
-              <div className="flex items-center gap-2 text-[11px] text-gray-400">
-                <Cpu size={13} className="text-emerald-400" />
-                <span>GPU Acceleration</span>
-              </div>
-              <div className="flex items-center gap-2 text-[11px] text-gray-400">
-                <Zap size={13} className="text-amber-400" />
-                <span>MFT Fast Scanning</span>
-              </div>
             </div>
           </div>
         </div>

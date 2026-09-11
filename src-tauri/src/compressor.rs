@@ -1,13 +1,15 @@
-use crate::types::{AppError, AppResult, CompressionAlgorithm, CompressedVaultEntry, CompressionProgress};
-use std::path::{Path, PathBuf};
+use crate::types::{
+    AppError, AppResult, CompressedVaultEntry, CompressionAlgorithm, CompressionProgress,
+};
+use chrono::Utc;
+use log::{info, warn};
+use lz4_flex::frame::{FrameDecoder, FrameEncoder};
 use std::fs::{self, File};
 use std::io::{BufReader, BufWriter, Write};
-use log::{info, warn};
-use walkdir::WalkDir;
-use uuid::Uuid;
-use chrono::Utc;
-use lz4_flex::frame::{FrameEncoder, FrameDecoder};
+use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter};
+use uuid::Uuid;
+use walkdir::WalkDir;
 
 pub fn get_vault_directory() -> PathBuf {
     let base = dirs::data_dir()
@@ -25,7 +27,10 @@ pub fn compress_shader_target(
     algorithm: CompressionAlgorithm,
 ) -> AppResult<CompressedVaultEntry> {
     if !source_path.exists() {
-        return Err(AppError::Other(format!("Source shader path does not exist: {}", source_path.display())));
+        return Err(AppError::Other(format!(
+            "Source shader path does not exist: {}",
+            source_path.display()
+        )));
     }
 
     let vault_dir = get_vault_directory();
@@ -37,9 +42,25 @@ pub fn compress_shader_target(
     let is_directory = source_path.is_dir();
 
     let (compressed_path, original_size, compressed_size) = if is_directory {
-        compress_directory_streaming(app, source_path, &target_dir, &entry_id, &algorithm, cache_id, game_name)?
+        compress_directory_streaming(
+            app,
+            source_path,
+            &target_dir,
+            &entry_id,
+            &algorithm,
+            cache_id,
+            game_name,
+        )?
     } else {
-        compress_single_file_streaming(app, source_path, &target_dir, &entry_id, &algorithm, cache_id, game_name)?
+        compress_single_file_streaming(
+            app,
+            source_path,
+            &target_dir,
+            &entry_id,
+            &algorithm,
+            cache_id,
+            game_name,
+        )?
     };
 
     let ratio = if original_size > 0 {
@@ -49,17 +70,20 @@ pub fn compress_shader_target(
         0.0
     };
 
-    let _ = app.emit("compression-progress", CompressionProgress {
-        cache_id: cache_id.to_string(),
-        game_name: game_name.to_string(),
-        stage: "done".to_string(),
-        current_file: "Completed".to_string(),
-        processed_files: 1,
-        total_files: 1,
-        processed_bytes: original_size,
-        total_bytes: original_size,
-        percent: 100.0,
-    });
+    let _ = app.emit(
+        "compression-progress",
+        CompressionProgress {
+            cache_id: cache_id.to_string(),
+            game_name: game_name.to_string(),
+            stage: "done".to_string(),
+            current_file: "Completed".to_string(),
+            processed_files: 1,
+            total_files: 1,
+            processed_bytes: original_size,
+            total_bytes: original_size,
+            percent: 100.0,
+        },
+    );
 
     info!(
         "[Compressor] Compressed {} ({}) -> {} bytes ({:.1}% saved) with {:?}",
@@ -124,17 +148,20 @@ fn compress_single_file_streaming(
 
     let mut reader = BufReader::with_capacity(256 * 1024, source_file);
 
-    let _ = app.emit("compression-progress", CompressionProgress {
-        cache_id: cache_id.to_string(),
-        game_name: game_name.to_string(),
-        stage: "compressing".to_string(),
-        current_file: file_stem.to_string(),
-        processed_files: 0,
-        total_files: 1,
-        processed_bytes: 0,
-        total_bytes: original_size,
-        percent: 0.0,
-    });
+    let _ = app.emit(
+        "compression-progress",
+        CompressionProgress {
+            cache_id: cache_id.to_string(),
+            game_name: game_name.to_string(),
+            stage: "compressing".to_string(),
+            current_file: file_stem.to_string(),
+            processed_files: 0,
+            total_files: 1,
+            processed_bytes: 0,
+            total_bytes: original_size,
+            percent: 0.0,
+        },
+    );
 
     let encode_result: AppResult<()> = (|| {
         match algorithm {
@@ -146,7 +173,9 @@ fn compress_single_file_streaming(
             CompressionAlgorithm::Lz4 => {
                 let mut encoder = FrameEncoder::new(&mut dest_writer);
                 std::io::copy(&mut reader, &mut encoder)?;
-                encoder.finish().map_err(|e| AppError::Other(format!("LZ4 finish error: {e}")))?;
+                encoder
+                    .finish()
+                    .map_err(|e| AppError::Other(format!("LZ4 finish error: {e}")))?;
             }
         }
         dest_writer.flush()?;
@@ -224,7 +253,10 @@ fn compress_directory_streaming(
                                 header.set_size(0);
                                 header.set_mode(0o644);
                                 header.set_cksum();
-                                if tar_builder.append_data(&mut header, relative, std::io::empty()).is_ok() {
+                                if tar_builder
+                                    .append_data(&mut header, relative, std::io::empty())
+                                    .is_ok()
+                                {
                                     processed_files += 1;
                                 }
                             } else if f_len <= 32 * 1024 * 1024 {
@@ -234,7 +266,10 @@ fn compress_directory_streaming(
                                     header.set_size(file_buf.len() as u64);
                                     header.set_mode(0o644);
                                     header.set_cksum();
-                                    if tar_builder.append_data(&mut header, relative, &file_buf[..]).is_ok() {
+                                    if tar_builder
+                                        .append_data(&mut header, relative, &file_buf[..])
+                                        .is_ok()
+                                    {
                                         processed_bytes += file_buf.len() as u64;
                                         processed_files += 1;
                                     }
@@ -247,11 +282,17 @@ fn compress_directory_streaming(
                             }
                         }
                         Err(e) => {
-                            warn!("[Compressor] Skipping locked/inaccessible file {}: {:?}", path.display(), e);
+                            warn!(
+                                "[Compressor] Skipping locked/inaccessible file {}: {:?}",
+                                path.display(),
+                                e
+                            );
                         }
                     }
 
-                    if last_progress_time.elapsed().as_millis() > 200 || processed_files == total_files {
+                    if last_progress_time.elapsed().as_millis() > 200
+                        || processed_files == total_files
+                    {
                         last_progress_time = std::time::Instant::now();
                         let percent = if total_bytes > 0 {
                             ((processed_bytes as f64 / total_bytes as f64) * 100.0).min(99.0) as f32
@@ -259,17 +300,20 @@ fn compress_directory_streaming(
                             0.0
                         };
 
-                        let _ = app.emit("compression-progress", CompressionProgress {
-                            cache_id: cache_id.to_string(),
-                            game_name: game_name.to_string(),
-                            stage: "compressing".to_string(),
-                            current_file: relative.to_string_lossy().to_string(),
-                            processed_files,
-                            total_files,
-                            processed_bytes,
-                            total_bytes,
-                            percent,
-                        });
+                        let _ = app.emit(
+                            "compression-progress",
+                            CompressionProgress {
+                                cache_id: cache_id.to_string(),
+                                game_name: game_name.to_string(),
+                                stage: "compressing".to_string(),
+                                current_file: relative.to_string_lossy().to_string(),
+                                processed_files,
+                                total_files,
+                                processed_bytes,
+                                total_bytes,
+                                percent,
+                            },
+                        );
                     }
                 }
             }
@@ -298,7 +342,10 @@ fn compress_directory_streaming(
                                 header.set_size(0);
                                 header.set_mode(0o644);
                                 header.set_cksum();
-                                if tar_builder.append_data(&mut header, relative, std::io::empty()).is_ok() {
+                                if tar_builder
+                                    .append_data(&mut header, relative, std::io::empty())
+                                    .is_ok()
+                                {
                                     processed_files += 1;
                                 }
                             } else if f_len <= 32 * 1024 * 1024 {
@@ -308,7 +355,10 @@ fn compress_directory_streaming(
                                     header.set_size(file_buf.len() as u64);
                                     header.set_mode(0o644);
                                     header.set_cksum();
-                                    if tar_builder.append_data(&mut header, relative, &file_buf[..]).is_ok() {
+                                    if tar_builder
+                                        .append_data(&mut header, relative, &file_buf[..])
+                                        .is_ok()
+                                    {
                                         processed_bytes += file_buf.len() as u64;
                                         processed_files += 1;
                                     }
@@ -321,11 +371,17 @@ fn compress_directory_streaming(
                             }
                         }
                         Err(e) => {
-                            warn!("[Compressor] Skipping locked/inaccessible file {}: {:?}", path.display(), e);
+                            warn!(
+                                "[Compressor] Skipping locked/inaccessible file {}: {:?}",
+                                path.display(),
+                                e
+                            );
                         }
                     }
 
-                    if last_progress_time.elapsed().as_millis() > 200 || processed_files == total_files {
+                    if last_progress_time.elapsed().as_millis() > 200
+                        || processed_files == total_files
+                    {
                         last_progress_time = std::time::Instant::now();
                         let percent = if total_bytes > 0 {
                             ((processed_bytes as f64 / total_bytes as f64) * 100.0).min(99.0) as f32
@@ -333,23 +389,28 @@ fn compress_directory_streaming(
                             0.0
                         };
 
-                        let _ = app.emit("compression-progress", CompressionProgress {
-                            cache_id: cache_id.to_string(),
-                            game_name: game_name.to_string(),
-                            stage: "compressing".to_string(),
-                            current_file: relative.to_string_lossy().to_string(),
-                            processed_files,
-                            total_files,
-                            processed_bytes,
-                            total_bytes,
-                            percent,
-                        });
+                        let _ = app.emit(
+                            "compression-progress",
+                            CompressionProgress {
+                                cache_id: cache_id.to_string(),
+                                game_name: game_name.to_string(),
+                                stage: "compressing".to_string(),
+                                current_file: relative.to_string_lossy().to_string(),
+                                processed_files,
+                                total_files,
+                                processed_bytes,
+                                total_bytes,
+                                percent,
+                            },
+                        );
                     }
                 }
             }
 
             let encoder = tar_builder.into_inner()?;
-            encoder.finish().map_err(|e| AppError::Other(format!("LZ4 finish error: {e}")))?;
+            encoder
+                .finish()
+                .map_err(|e| AppError::Other(format!("LZ4 finish error: {e}")))?;
             Ok(())
         })(),
     };
@@ -396,17 +457,20 @@ pub fn decompress_shader_target(
     let total_comp_bytes = comp_file.metadata()?.len();
     let buf_reader = BufReader::with_capacity(512 * 1024, comp_file);
 
-    let _ = app.emit("compression-progress", CompressionProgress {
-        cache_id: cache_id.to_string(),
-        game_name: game_name.to_string(),
-        stage: "decompressing".to_string(),
-        current_file: "Extracting shaders...".to_string(),
-        processed_files: 0,
-        total_files: 1,
-        processed_bytes: 0,
-        total_bytes: total_comp_bytes,
-        percent: 10.0,
-    });
+    let _ = app.emit(
+        "compression-progress",
+        CompressionProgress {
+            cache_id: cache_id.to_string(),
+            game_name: game_name.to_string(),
+            stage: "decompressing".to_string(),
+            current_file: "Extracting shaders...".to_string(),
+            processed_files: 0,
+            total_files: 1,
+            processed_bytes: 0,
+            total_bytes: total_comp_bytes,
+            percent: 10.0,
+        },
+    );
 
     if is_tar {
         fs::create_dir_all(original_target_path)?;
@@ -415,30 +479,46 @@ pub fn decompress_shader_target(
             CompressionAlgorithm::Zstd => {
                 let decoder = zstd::stream::Decoder::new(buf_reader)?;
                 let mut archive = tar::Archive::new(decoder);
-                for entry in archive.entries()? {
-                    if let Ok(mut e) = entry {
-                        if let Ok(rel) = e.path() {
-                            let unpacked_path = original_target_path.join(&rel);
-                            if let Some(parent) = unpacked_path.parent() {
-                                fs::create_dir_all(parent)?;
-                            }
-                            let _ = e.unpack(&unpacked_path);
+                for mut e in archive.entries()?.flatten() {
+                    if let Ok(rel) = e.path() {
+                        let unpacked_path =
+                            match crate::utils::safe_extract_path(original_target_path, &rel) {
+                                Some(p) => p,
+                                None => {
+                                    warn!(
+                                        "[decompress] Skipping unsafe path traversal entry: {}",
+                                        rel.display()
+                                    );
+                                    continue;
+                                }
+                            };
+                        if let Some(parent) = unpacked_path.parent() {
+                            fs::create_dir_all(parent)?;
                         }
+                        let _ = e.unpack(&unpacked_path);
                     }
                 }
             }
             CompressionAlgorithm::Lz4 => {
                 let decoder = FrameDecoder::new(buf_reader);
                 let mut archive = tar::Archive::new(decoder);
-                for entry in archive.entries()? {
-                    if let Ok(mut e) = entry {
-                        if let Ok(rel) = e.path() {
-                            let unpacked_path = original_target_path.join(&rel);
-                            if let Some(parent) = unpacked_path.parent() {
-                                fs::create_dir_all(parent)?;
-                            }
-                            let _ = e.unpack(&unpacked_path);
+                for mut e in archive.entries()?.flatten() {
+                    if let Ok(rel) = e.path() {
+                        let unpacked_path =
+                            match crate::utils::safe_extract_path(original_target_path, &rel) {
+                                Some(p) => p,
+                                None => {
+                                    warn!(
+                                        "[decompress] Skipping unsafe path traversal entry: {}",
+                                        rel.display()
+                                    );
+                                    continue;
+                                }
+                            };
+                        if let Some(parent) = unpacked_path.parent() {
+                            fs::create_dir_all(parent)?;
                         }
+                        let _ = e.unpack(&unpacked_path);
                     }
                 }
             }
@@ -463,17 +543,20 @@ pub fn decompress_shader_target(
         out_writer.flush()?;
     }
 
-    let _ = app.emit("compression-progress", CompressionProgress {
-        cache_id: cache_id.to_string(),
-        game_name: game_name.to_string(),
-        stage: "done".to_string(),
-        current_file: "Decompressed".to_string(),
-        processed_files: 1,
-        total_files: 1,
-        processed_bytes: total_comp_bytes,
-        total_bytes: total_comp_bytes,
-        percent: 100.0,
-    });
+    let _ = app.emit(
+        "compression-progress",
+        CompressionProgress {
+            cache_id: cache_id.to_string(),
+            game_name: game_name.to_string(),
+            stage: "done".to_string(),
+            current_file: "Decompressed".to_string(),
+            processed_files: 1,
+            total_files: 1,
+            processed_bytes: total_comp_bytes,
+            total_bytes: total_comp_bytes,
+            percent: 100.0,
+        },
+    );
 
     info!(
         "[Compressor] Decompressed {} -> {}",

@@ -7,7 +7,6 @@ import {
   Gamepad2,
   ArrowUpDown,
   Filter,
-  Zap,
   LayoutGrid,
   Layers,
   List,
@@ -26,7 +25,7 @@ import {
   LauncherLayoutMode,
   DetectedGame,
 } from "../types";
-import { useScanner, getEverythingStatus, deleteGame } from "../hooks/useScanner";
+import { useScanner, deleteGame } from "../hooks/useScanner";
 import { ScanProgressBar } from "../components/ScanProgressBar";
 import { formatBytes, formatRelativeDate, PlatformBadge, SourceBadge } from "../components/ui";
 import { GameGridView } from "../components/GameGridView";
@@ -229,7 +228,6 @@ export function Dashboard() {
   const [sortDir, setSortDir]     = useState<SortDir>("desc");
   const [filterPlatform, setFilterPlatform] = useState<FilterPlatform>("all");
   const [filterHasCache, setFilterHasCache] = useState<FilterHasCache>("all");
-  const [everythingAvailable, setEverythingAvailable] = useState<boolean | null>(null);
   const [searchParams, setSearchParams] = useSearchParams();
 
   const [showScannerDialog, setShowScannerDialog] = useState(false);
@@ -281,7 +279,6 @@ export function Dashboard() {
     if (!result && status === "idle") {
       startScan();
     }
-    getEverythingStatus().then((s) => setEverythingAvailable(s.http_available));
   }, []);
 
   function handleSetLayout(mode: LauncherLayoutMode) {
@@ -410,21 +407,6 @@ export function Dashboard() {
         </div>
 
         <div className="flex items-center gap-3">
-
-          {everythingAvailable !== null && (
-            <div
-              className={`hidden md:flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full border ${
-                everythingAvailable
-                  ? "bg-green-950/40 text-green-400 border-green-800/40"
-                  : "bg-surface-800 text-gray-500 border-white/5"
-              }`}
-              title={everythingAvailable ? "Everything MFT active — ultra-fast scanner enabled" : "Everything inactive"}
-            >
-              <Zap size={11} />
-              MFT {everythingAvailable ? "Active" : "Inactive"}
-            </div>
-          )}
-
           <div className="flex items-center bg-surface-800 rounded-lg p-0.5 border border-white/5">
             <button
               onClick={() => handleSetLayout("grid")}

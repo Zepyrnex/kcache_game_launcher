@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Kcache",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "identifier": "com.kcache.launcher",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -25,7 +25,7 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; img-src 'self' data: asset: http://asset.localhost https://asset.localhost https://shared.fastly.steamstatic.com https://cdn.cloudflare.steamstatic.com https://cdn.akamai.steamstatic.com https://steamcdn-a.akamaihd.net https://media.steampowered.com https://avatars.steamstatic.com https://store.steampowered.com; style-src 'self' 'unsafe-inline'; script-src 'self'"
     }
   },
   "bundle": {

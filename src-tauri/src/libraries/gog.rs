@@ -1,12 +1,11 @@
-use crate::types::{DetectedGame, GamePlatform};
 use crate::libraries::GameLibrary;
+use crate::types::{DetectedGame, GamePlatform};
+use log::{debug, info, warn};
 use std::path::PathBuf;
-use log::{info, debug, warn};
 
 pub struct GogLibrary;
 
 impl GogLibrary {
-
     #[cfg(windows)]
     fn detect_via_registry() -> Vec<DetectedGame> {
         use winreg::enums::HKEY_LOCAL_MACHINE;
@@ -163,11 +162,9 @@ impl GameLibrary for GogLibrary {
     }
 
     fn detect(&self) -> Vec<DetectedGame> {
-
         let mut games = Self::detect_via_registry();
 
         if games.is_empty() {
-
             games = Self::detect_via_galaxy_db();
         }
 

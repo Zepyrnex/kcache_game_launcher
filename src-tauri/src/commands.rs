@@ -1,27 +1,28 @@
-use crate::types::*;
-use crate::db::{Database, TrashRecord};
-use crate::backup::{backup_paths, restore_archive, make_archive_path};
+use crate::backup::{backup_paths, make_archive_path, restore_archive};
 use crate::compressor::{compress_shader_target, decompress_shader_target, get_vault_directory};
-use crate::matcher::Matcher;
-use crate::scanners::CacheScanner;
-use crate::scanners::gpu_drivers::{NvidiaScanner, AmdScanner, IntelScanner};
-use crate::scanners::steam_cache::SteamCacheScanner;
-use crate::scanners::dxvk::DxvkScanner;
-use crate::scanners::exe_scanner::ExeScanner;
-use crate::steam_api::SteamApiClient;
-use crate::libraries::GameLibrary;
-use crate::libraries::steam::SteamLibrary;
+use crate::db::{Database, TrashRecord};
+use crate::everything::{find_everything_install, EverythingClient};
 use crate::libraries::epic::EpicLibrary;
 use crate::libraries::gog::GogLibrary;
-use crate::everything::{find_everything_install, EverythingClient};
-use crate::utils::{validate_path_allowed, is_path_locked};
+use crate::libraries::steam::SteamLibrary;
+use crate::libraries::GameLibrary;
+use crate::matcher::Matcher;
+use crate::scanners::dxvk::DxvkScanner;
+use crate::scanners::exe_scanner::ExeScanner;
+use crate::scanners::gpu_drivers::{AmdScanner, IntelScanner, NvidiaScanner};
+use crate::scanners::steam_cache::SteamCacheScanner;
+use crate::scanners::CacheScanner;
+use crate::steam_api::SteamApiClient;
+use crate::types::*;
+use crate::utils::{is_path_locked, validate_path_allowed};
 
+use chrono::Utc;
+use log::{error, info};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Instant;
-use tauri::{AppHandle, Emitter, State, Manager};
-use log::{info, error};
-use chrono::Utc;
+use tauri::{AppHandle, Emitter, Manager, State};
 
 #[derive(Clone)]
 pub struct ActiveSessionInfo {
@@ -31,7 +32,7 @@ pub struct ActiveSessionInfo {
 
 pub struct AppState {
     pub db: Mutex<Database>,
-    pub active_session: Mutex<Option<ActiveSessionInfo>>,
+    pub active_session: Mutex<HashMap<String, ActiveSessionInfo>>,
 }
 
 #[cfg(windows)]
@@ -87,7 +88,11 @@ pub fn is_exe_running(exe_name: &str) -> bool {
         let mut found = false;
         if Process32FirstW(snapshot, &mut entry) != 0 {
             loop {
-                let len = entry.sz_exe_file.iter().position(|&c| c == 0).unwrap_or(260);
+                let len = entry
+                    .sz_exe_file
+                    .iter()
+                    .position(|&c| c == 0)
+                    .unwrap_or(260);
                 let name = String::from_utf16_lossy(&entry.sz_exe_file[..len]);
                 if name.to_lowercase() == target {
                     found = true;
@@ -132,12 +137,15 @@ pub async fn run_scan(app: AppHandle, state: State<'_, AppState>) -> Result<Scan
         let app = app.clone();
         move |stage: &str, found: usize, bytes: u64| {
             eprintln!("[PROGRESS] {stage} (found: {found}, bytes: {bytes})");
-            let _ = app.emit("scan-progress", ScanProgress {
-                stage: stage.to_string(),
-                current_path: None,
-                items_found: found,
-                bytes_found: bytes,
-            });
+            let _ = app.emit(
+                "scan-progress",
+                ScanProgress {
+                    stage: stage.to_string(),
+                    current_path: None,
+                    items_found: found,
+                    bytes_found: bytes,
+                },
+            );
         }
     };
 
@@ -150,7 +158,9 @@ pub async fn run_scan(app: AppHandle, state: State<'_, AppState>) -> Result<Scan
         games.extend(GogLibrary.detect());
         eprintln!("[Phase 1] Game detection done: {} games found", games.len());
         games
-    }).await.map_err(|e| AppError::Other(format!("Library scan panic: {e}")))?;
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("Library scan panic: {e}")))?;
 
     {
         if let Ok(db) = state.db.lock() {
@@ -208,19 +218,33 @@ pub async fn run_scan(app: AppHandle, state: State<'_, AppState>) -> Result<Scan
 
     for game in &mut all_games {
         if let Some(app_id) = &game.app_id {
-            if game.cover_url.is_none() || game.cover_url.as_ref().map(|s| s.is_empty()).unwrap_or(true) {
+            if game.cover_url.is_none()
+                || game
+                    .cover_url
+                    .as_ref()
+                    .map(|s| s.is_empty())
+                    .unwrap_or(true)
+            {
                 game.cover_url = Some(SteamApiClient::get_cdn_cover_url(app_id));
             }
-            if game.hero_url.is_none() || game.hero_url.as_ref().map(|s| s.is_empty()).unwrap_or(true) {
+            if game.hero_url.is_none()
+                || game.hero_url.as_ref().map(|s| s.is_empty()).unwrap_or(true)
+            {
                 game.hero_url = Some(SteamApiClient::get_cdn_hero_url(app_id));
             }
-            if game.logo_url.is_none() || game.logo_url.as_ref().map(|s| s.is_empty()).unwrap_or(true) {
+            if game.logo_url.is_none()
+                || game.logo_url.as_ref().map(|s| s.is_empty()).unwrap_or(true)
+            {
                 game.logo_url = Some(SteamApiClient::get_cdn_logo_url(app_id));
             }
         }
     }
 
-    emit(&format!("Game libraries scanned ({} games)", all_games.len()), all_games.len(), 0);
+    emit(
+        &format!("Game libraries scanned ({} games)", all_games.len()),
+        all_games.len(),
+        0,
+    );
 
     emit("Scanning GPU driver caches…", all_games.len(), 0);
     let gpu_caches: Vec<CacheEntry> = tokio::task::spawn_blocking(|| {
@@ -231,39 +255,64 @@ pub async fn run_scan(app: AppHandle, state: State<'_, AppState>) -> Result<Scan
         entries.extend(IntelScanner.scan());
         eprintln!("[Phase 2] GPU caches done: {} found", entries.len());
         entries
-    }).await.map_err(|e| AppError::Other(format!("GPU scan panic: {e}")))?;
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("GPU scan panic: {e}")))?;
 
     emit("GPU driver caches scanned", gpu_caches.len(), 0);
 
     emit("Scanning Steam shader caches…", gpu_caches.len(), 0);
     let steam_paths = tokio::task::spawn_blocking(SteamLibrary::get_library_paths)
-        .await.unwrap_or_default();
+        .await
+        .unwrap_or_default();
     let steam_paths_clone = steam_paths.clone();
     let steam_caches: Vec<CacheEntry> = tokio::task::spawn_blocking(move || {
         eprintln!("[Phase 3] Scanning Steam shader caches...");
-        let entries = SteamCacheScanner { steam_libraries: steam_paths_clone }.scan();
+        let entries = SteamCacheScanner {
+            steam_libraries: steam_paths_clone,
+        }
+        .scan();
         eprintln!("[Phase 3] Steam caches done: {} found", entries.len());
         entries
-    }).await.map_err(|e| AppError::Other(format!("Steam cache scan panic: {e}")))?;
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("Steam cache scan panic: {e}")))?;
 
-    emit("Scanning DXVK/VKD3D caches…", gpu_caches.len() + steam_caches.len(), 0);
-    let install_dirs: Vec<PathBuf> = all_games.iter()
+    emit(
+        "Scanning DXVK/VKD3D caches…",
+        gpu_caches.len() + steam_caches.len(),
+        0,
+    );
+    let install_dirs: Vec<PathBuf> = all_games
+        .iter()
         .map(|g| PathBuf::from(&g.install_path))
         .filter(|p| p.exists())
         .collect();
     let dxvk_caches: Vec<CacheEntry> = tokio::task::spawn_blocking(move || {
-        eprintln!("[Phase 4] Scanning DXVK/VKD3D in {} dirs...", install_dirs.len());
-        let entries = DxvkScanner { game_install_dirs: install_dirs }.scan();
+        eprintln!(
+            "[Phase 4] Scanning DXVK/VKD3D in {} dirs...",
+            install_dirs.len()
+        );
+        let entries = DxvkScanner {
+            game_install_dirs: install_dirs,
+        }
+        .scan();
         eprintln!("[Phase 4] DXVK done: {} found", entries.len());
         entries
-    }).await.map_err(|e| AppError::Other(format!("DXVK scan panic: {e}")))?;
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("DXVK scan panic: {e}")))?;
 
     let mut all_caches = Vec::new();
     all_caches.extend(gpu_caches);
     all_caches.extend(steam_caches);
     all_caches.extend(dxvk_caches);
 
-    emit(&format!("Cache scan complete ({} entries)", all_caches.len()), all_caches.len(), 0);
+    emit(
+        &format!("Cache scan complete ({} entries)", all_caches.len()),
+        all_caches.len(),
+        0,
+    );
 
     emit("Matching caches to games…", all_caches.len(), 0);
     let games_for_match = all_games.clone();
@@ -273,34 +322,54 @@ pub async fn run_scan(app: AppHandle, state: State<'_, AppState>) -> Result<Scan
         let res = Matcher::new().associate(&games_for_match, &mut caches_for_match);
         eprintln!("[Phase 5] Matching done");
         res
-    }).await.map_err(|e| AppError::Other(format!("Matcher panic: {e}")))?;
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("Matcher panic: {e}")))?;
 
     emit("Saving results…", all_caches.len(), 0);
     {
-        let db = state.db.lock().map_err(|_| AppError::Other("DB lock poisoned".into()))?;
+        let db = state
+            .db
+            .lock()
+            .map_err(|_| AppError::Other("DB lock poisoned".into()))?;
         for game in &all_games {
-            db.upsert_game(game).unwrap_or_else(|e| error!("[DB] upsert_game: {e}"));
+            db.upsert_game(game)
+                .unwrap_or_else(|e| error!("[DB] upsert_game: {e}"));
         }
         for cache in &all_caches {
-            db.upsert_cache_entry(cache).unwrap_or_else(|e| error!("[DB] upsert_cache: {e}"));
+            db.upsert_cache_entry(cache)
+                .unwrap_or_else(|e| error!("[DB] upsert_cache: {e}"));
         }
     }
 
     let gpu_sources = [
-        CacheSource::NvidiaDx, CacheSource::NvidiaGl,
-        CacheSource::AmdDx, CacheSource::AmdDxc,
+        CacheSource::NvidiaDx,
+        CacheSource::NvidiaGl,
+        CacheSource::AmdDx,
+        CacheSource::AmdDxc,
         CacheSource::IntelShader,
     ];
-    let gpu_cache_size: u64 = all_caches.iter()
-        .filter(|c| gpu_sources.contains(&c.source)).map(|c| c.size_bytes).sum();
-    let game_cache_size: u64 = all_caches.iter()
-        .filter(|c| !gpu_sources.contains(&c.source)).map(|c| c.size_bytes).sum();
+    let gpu_cache_size: u64 = all_caches
+        .iter()
+        .filter(|c| gpu_sources.contains(&c.source))
+        .map(|c| c.size_bytes)
+        .sum();
+    let game_cache_size: u64 = all_caches
+        .iter()
+        .filter(|c| !gpu_sources.contains(&c.source))
+        .map(|c| c.size_bytes)
+        .sum();
     let total_size_bytes = gpu_cache_size + game_cache_size;
     let scan_duration_ms = start.elapsed().as_millis() as u64;
 
     emit("Scan complete!", all_caches.len(), total_size_bytes);
-    info!("[cmd] run_scan done in {}ms: {} games, {} caches, {} total",
-        scan_duration_ms, all_games.len(), all_caches.len(), total_size_bytes);
+    info!(
+        "[cmd] run_scan done in {}ms: {} games, {} caches, {} total",
+        scan_duration_ms,
+        all_games.len(),
+        all_caches.len(),
+        total_size_bytes
+    );
 
     Ok(ScanResult {
         games: all_games,
@@ -347,21 +416,20 @@ pub async fn delete_cache(
     validate_path_allowed(&path)?;
 
     if !path.exists() {
-        return Err(AppError::Other(format!("Cache path does not exist: {cache_path}")));
+        return Err(AppError::Other(format!(
+            "Cache path does not exist: {cache_path}"
+        )));
     }
 
     let trash_dir = {
-        let base = dirs::data_dir()
-            .unwrap_or_else(|| PathBuf::from(r"C:\Users\Public\AppData\Roaming"));
+        let base =
+            dirs::data_dir().unwrap_or_else(|| PathBuf::from(r"C:\Users\Public\AppData\Roaming"));
         base.join("Kcache").join("Trash")
     };
     std::fs::create_dir_all(&trash_dir)?;
 
     let timestamp = Utc::now().format("%Y%m%d_%H%M%S%.3f");
-    let original_name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("cache");
+    let original_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("cache");
     let trash_name = format!("{timestamp}_{original_name}");
     let trash_path = trash_dir.join(&trash_name);
 
@@ -371,13 +439,16 @@ pub async fn delete_cache(
                 "The file is in use by a running game or process: {cache_path}"
             )));
         }
-        info!("[cmd] Moving file to trash: {} → {}", path.display(), trash_path.display());
+        info!(
+            "[cmd] Moving file to trash: {} → {}",
+            path.display(),
+            trash_path.display()
+        );
         if std::fs::rename(&path, &trash_path).is_err() {
             std::fs::copy(&path, &trash_path)?;
             let _ = std::fs::remove_file(&path);
         }
     } else if path.is_dir() {
-
         std::fs::create_dir_all(&trash_path)?;
 
         let mut moved_count = 0usize;
@@ -400,13 +471,11 @@ pub async fn delete_cache(
                         skipped_count += 1;
                     }
                 } else {
-
                     if std::fs::copy(&entry_path, &target_entry).is_ok() {
                         if std::fs::remove_file(&entry_path).is_ok() {
                             moved_count += 1;
                             continue;
                         } else {
-
                             let _ = std::fs::remove_file(&target_entry);
                         }
                     }
@@ -431,7 +500,10 @@ pub async fn delete_cache(
         }
     }
 
-    let db = state.db.lock().map_err(|_| AppError::Other("DB lock poisoned".into()))?;
+    let db = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Other("DB lock poisoned".into()))?;
     db.delete_cache_entry_by_path(&cache_path)?;
     let trash_id = db.add_to_trash(
         &cache_path,
@@ -455,7 +527,10 @@ pub async fn restore_from_trash(
     trash_id: i64,
     state: State<'_, AppState>,
 ) -> Result<String, AppError> {
-    let db = state.db.lock().map_err(|_| AppError::Other("DB lock poisoned".into()))?;
+    let db = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Other("DB lock poisoned".into()))?;
 
     let items = db.get_trash_items()?;
     let item = items
@@ -502,7 +577,10 @@ pub async fn backup_game_cache(
     notes: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<BackupRecord, AppError> {
-    let db = state.db.lock().map_err(|_| AppError::Other("DB lock poisoned".into()))?;
+    let db = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Other("DB lock poisoned".into()))?;
 
     let backup_dir = {
         let setting = db.get_setting("backup_dir")?.unwrap_or_default();
@@ -540,8 +618,9 @@ pub async fn restore_game_cache(
     _backup_id: i64,
     _state: State<'_, AppState>,
 ) -> Result<Vec<String>, AppError> {
-
-    Err(AppError::Other("Use restore_cache_from_archive with the archive_path from get_backups.".into()))
+    Err(AppError::Other(
+        "Use restore_cache_from_archive with the archive_path from get_backups.".into(),
+    ))
 }
 
 #[tauri::command]
@@ -566,13 +645,19 @@ pub async fn get_backups(
     game_id: String,
     state: State<'_, AppState>,
 ) -> Result<Vec<BackupRecord>, AppError> {
-    let db = state.db.lock().map_err(|_| AppError::Other("DB lock poisoned".into()))?;
+    let db = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Other("DB lock poisoned".into()))?;
     Ok(db.get_backups_for_game(&game_id)?)
 }
 
 #[tauri::command]
 pub async fn get_trash(state: State<'_, AppState>) -> Result<Vec<TrashRecord>, AppError> {
-    let db = state.db.lock().map_err(|_| AppError::Other("DB lock poisoned".into()))?;
+    let db = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Other("DB lock poisoned".into()))?;
     Ok(db.get_trash_items()?)
 }
 
@@ -580,7 +665,10 @@ pub async fn get_trash(state: State<'_, AppState>) -> Result<Vec<TrashRecord>, A
 pub async fn get_settings(
     state: State<'_, AppState>,
 ) -> Result<std::collections::HashMap<String, String>, AppError> {
-    let db = state.db.lock().map_err(|_| AppError::Other("DB lock poisoned".into()))?;
+    let db = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Other("DB lock poisoned".into()))?;
     Ok(db.get_all_settings()?)
 }
 
@@ -590,7 +678,10 @@ pub async fn set_setting(
     value: String,
     state: State<'_, AppState>,
 ) -> Result<(), AppError> {
-    let db = state.db.lock().map_err(|_| AppError::Other("DB lock poisoned".into()))?;
+    let db = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Other("DB lock poisoned".into()))?;
     Ok(db.set_setting(&key, &value)?)
 }
 
@@ -625,38 +716,63 @@ pub async fn get_everything_status() -> EverythingStatus {
 
 #[tauri::command]
 pub async fn get_scan_folders(state: State<'_, AppState>) -> Result<Vec<ScanFolder>, AppError> {
-    let db = state.db.lock().map_err(|_| AppError::Other("DB lock poisoned".into()))?;
+    let db = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Other("DB lock poisoned".into()))?;
     Ok(db.get_scan_folders()?)
 }
 
 #[tauri::command]
-pub async fn add_scan_folder(path: String, state: State<'_, AppState>) -> Result<ScanFolder, AppError> {
+pub async fn add_scan_folder(
+    path: String,
+    state: State<'_, AppState>,
+) -> Result<ScanFolder, AppError> {
     let p = PathBuf::from(&path);
     if !p.exists() {
         return Err(AppError::Other(format!("Folder does not exist: {path}")));
     }
-    let db = state.db.lock().map_err(|_| AppError::Other("DB lock poisoned".into()))?;
+    let db = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Other("DB lock poisoned".into()))?;
     Ok(db.add_scan_folder(&path)?)
 }
 
 #[tauri::command]
 pub async fn remove_scan_folder(id: i64, state: State<'_, AppState>) -> Result<(), AppError> {
-    let db = state.db.lock().map_err(|_| AppError::Other("DB lock poisoned".into()))?;
+    let db = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Other("DB lock poisoned".into()))?;
     Ok(db.remove_scan_folder(id)?)
 }
 
 #[tauri::command]
-pub async fn toggle_scan_folder(id: i64, enabled: bool, state: State<'_, AppState>) -> Result<(), AppError> {
-    let db = state.db.lock().map_err(|_| AppError::Other("DB lock poisoned".into()))?;
+pub async fn toggle_scan_folder(
+    id: i64,
+    enabled: bool,
+    state: State<'_, AppState>,
+) -> Result<(), AppError> {
+    let db = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Other("DB lock poisoned".into()))?;
     Ok(db.toggle_scan_folder(id, enabled)?)
 }
 
 #[tauri::command]
-pub async fn scan_custom_folders(state: State<'_, AppState>) -> Result<Vec<DiscoveredProgram>, AppError> {
+pub async fn scan_custom_folders(
+    state: State<'_, AppState>,
+) -> Result<Vec<DiscoveredProgram>, AppError> {
     let folders: Vec<PathBuf> = {
-        let db = state.db.lock().map_err(|_| AppError::Other("DB lock poisoned".into()))?;
+        let db = state
+            .db
+            .lock()
+            .map_err(|_| AppError::Other("DB lock poisoned".into()))?;
         let saved = db.get_scan_folders()?;
-        let enabled: Vec<PathBuf> = saved.into_iter()
+        let enabled: Vec<PathBuf> = saved
+            .into_iter()
             .filter(|f| f.enabled)
             .map(|f| PathBuf::from(f.path))
             .collect();
@@ -664,7 +780,6 @@ pub async fn scan_custom_folders(state: State<'_, AppState>) -> Result<Vec<Disco
         if !enabled.is_empty() {
             enabled
         } else {
-
             let mut defaults = crate::libraries::steam::SteamLibrary::get_library_paths();
             for candidate in &[r"C:\Games", r"D:\Games", r"E:\Games", r"F:\Games"] {
                 let p = PathBuf::from(candidate);
@@ -682,7 +797,11 @@ pub async fn scan_custom_folders(state: State<'_, AppState>) -> Result<Vec<Disco
 
     tokio::task::spawn_blocking(move || {
         let mut client = EverythingClient::new();
-        let everything_opt = if client.is_available() { Some(&client) } else { None };
+        let everything_opt = if client.is_available() {
+            Some(&client)
+        } else {
+            None
+        };
         Ok(ExeScanner::scan_folders(&folders, everything_opt))
     })
     .await
@@ -697,7 +816,10 @@ pub async fn add_custom_games(
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
-    let db = state.db.lock().map_err(|_| AppError::Other("DB lock poisoned".into()))?;
+    let db = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Other("DB lock poisoned".into()))?;
     let existing_games = db.get_all_games()?;
     let mut added = Vec::new();
 
@@ -711,12 +833,15 @@ pub async fn add_custom_games(
                     return true;
                 }
             }
-            if let (Some(ref matched_id), Some(ref game_appid)) = (&prog.matched_app_id, &g.app_id) {
+            if let (Some(ref matched_id), Some(ref game_appid)) = (&prog.matched_app_id, &g.app_id)
+            {
                 if !matched_id.is_empty() && matched_id == game_appid {
                     return true;
                 }
             }
-            if !g.install_path.is_empty() && g.install_path.to_lowercase().replace('/', "\\") == normalized_new_folder {
+            if !g.install_path.is_empty()
+                && g.install_path.to_lowercase().replace('/', "\\") == normalized_new_folder
+            {
                 return true;
             }
             false
@@ -731,8 +856,14 @@ pub async fn add_custom_games(
             (format!("custom_{hash:016x}"), GamePlatform::Custom)
         };
 
-        let hero_url = prog.matched_app_id.as_ref().map(|id| SteamApiClient::get_cdn_hero_url(id));
-        let logo_url = prog.matched_app_id.as_ref().map(|id| SteamApiClient::get_cdn_logo_url(id));
+        let hero_url = prog
+            .matched_app_id
+            .as_ref()
+            .map(|id| SteamApiClient::get_cdn_hero_url(id));
+        let logo_url = prog
+            .matched_app_id
+            .as_ref()
+            .map(|id| SteamApiClient::get_cdn_logo_url(id));
 
         let game = DetectedGame {
             id: game_id,
@@ -773,22 +904,40 @@ pub async fn launch_game(
     state: State<'_, AppState>,
 ) -> Result<(), AppError> {
     let (game, initial_playtime) = {
-        let db = state.db.lock().map_err(|_| AppError::Other("DB lock poisoned".into()))?;
-        let g = db.get_game_by_id(&game_id)?
+        let db = state
+            .db
+            .lock()
+            .map_err(|_| AppError::Other("DB lock poisoned".into()))?;
+        let g = db
+            .get_game_by_id(&game_id)?
             .ok_or_else(|| AppError::Other(format!("Game #{game_id} not found")))?;
         let p = db.get_game_playtime(&game_id).unwrap_or(0);
         (g, p)
     };
 
     {
-        let db = state.db.lock().map_err(|_| AppError::Other("DB lock poisoned".into()))?;
+        let db = state
+            .db
+            .lock()
+            .map_err(|_| AppError::Other("DB lock poisoned".into()))?;
         if let Ok(entries) = db.get_vault_entries_for_game(&game_id) {
             for entry in entries {
                 if entry.status == "compressed" {
                     let comp_path = PathBuf::from(&entry.compressed_path);
                     let orig_path = PathBuf::from(&entry.original_path);
-                    if let Err(e) = decompress_shader_target(&app, &comp_path, &orig_path, &entry.algorithm, &entry.cache_id, &entry.game_name) {
-                        error!("[Launcher] Auto-decompress failed for {}: {:?}", comp_path.display(), e);
+                    if let Err(e) = decompress_shader_target(
+                        &app,
+                        &comp_path,
+                        &orig_path,
+                        &entry.algorithm,
+                        &entry.cache_id,
+                        &entry.game_name,
+                    ) {
+                        error!(
+                            "[Launcher] Auto-decompress failed for {}: {:?}",
+                            comp_path.display(),
+                            e
+                        );
                     } else {
                         let _ = db.update_vault_entry_status(&entry.id, "decompressed");
                     }
@@ -805,7 +954,11 @@ pub async fn launch_game(
             let p = PathBuf::from(exe_path);
             if p.exists() {
                 let work_dir = p.parent().unwrap_or(&p);
-                info!("[Launcher] Launching executable {} in {}", p.display(), work_dir.display());
+                info!(
+                    "[Launcher] Launching executable {} in {}",
+                    p.display(),
+                    work_dir.display()
+                );
                 let child = std::process::Command::new(&p)
                     .current_dir(work_dir)
                     .spawn()
@@ -832,10 +985,22 @@ pub async fn launch_game(
                     let mut best: Option<(String, u64)> = None;
                     for entry in entries.flatten() {
                         let ep = entry.path();
-                        if ep.extension().and_then(|e| e.to_str()).map(|e| e.eq_ignore_ascii_case("exe")).unwrap_or(false) {
-                            let n = ep.file_name().unwrap_or_default().to_string_lossy().to_string();
+                        if ep
+                            .extension()
+                            .and_then(|e| e.to_str())
+                            .map(|e| e.eq_ignore_ascii_case("exe"))
+                            .unwrap_or(false)
+                        {
+                            let n = ep
+                                .file_name()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                                .to_string();
                             let nl = n.to_lowercase();
-                            if !nl.starts_with("unins") && !nl.contains("crash") && !nl.contains("report") {
+                            if !nl.starts_with("unins")
+                                && !nl.contains("crash")
+                                && !nl.contains("report")
+                            {
                                 let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
                                 if best.as_ref().map(|(_, s)| size > *s).unwrap_or(true) {
                                     best = Some((n, size));
@@ -852,7 +1017,9 @@ pub async fn launch_game(
     } else if launched_child.is_none() {
         if let Some(ref exe_path) = game.exe_path {
             if !exe_path.is_empty() {
-                return Err(AppError::Other(format!("Configured executable not found on disk: {exe_path}")));
+                return Err(AppError::Other(format!(
+                    "Configured executable not found on disk: {exe_path}"
+                )));
             }
         }
         return Err(AppError::Other("No valid executable path configured for this game. Use 'Change .exe' to select the game file.".into()));
@@ -860,31 +1027,46 @@ pub async fn launch_game(
 
     let now = Utc::now().timestamp();
     {
-        let db = state.db.lock().map_err(|_| AppError::Other("DB lock poisoned".into()))?;
+        let db = state
+            .db
+            .lock()
+            .map_err(|_| AppError::Other("DB lock poisoned".into()))?;
         let _ = db.update_last_played(&game_id, now);
     }
 
     let start_time = Instant::now();
     {
-        let mut session = state.active_session.lock().unwrap();
-        *session = Some(ActiveSessionInfo {
-            game_id: game_id.clone(),
-            started_at: start_time,
-        });
+        let mut session = state
+            .active_session
+            .lock()
+            .map_err(|_| AppError::Other("Session lock poisoned".into()))?;
+        session.insert(
+            game_id.clone(),
+            ActiveSessionInfo {
+                game_id: game_id.clone(),
+                started_at: start_time,
+            },
+        );
     }
 
-    let _ = app.emit("game-status-changed", PlaytimeInfo {
-        game_id: game_id.clone(),
-        total_playtime_secs: initial_playtime,
-        is_running: true,
-        session_duration_secs: 0,
-    });
+    let _ = app.emit(
+        "game-status-changed",
+        PlaytimeInfo {
+            game_id: game_id.clone(),
+            total_playtime_secs: initial_playtime,
+            is_running: true,
+            session_duration_secs: 0,
+        },
+    );
 
     let app_clone = app.clone();
     let task_game_id = game_id.clone();
 
     tokio::spawn(async move {
-        info!("[PlaytimeMonitor] Starting monitor for game: {} (exe: {:?})", task_game_id, exe_filename);
+        info!(
+            "[PlaytimeMonitor] Starting monitor for game: {} (exe: {:?})",
+            task_game_id, exe_filename
+        );
         let mut uncommitted_secs: u64 = 0;
         let mut last_checkpoint = Instant::now();
         let mut child = launched_child;
@@ -894,14 +1076,12 @@ pub async fn launch_game(
         }
 
         loop {
-
             tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
 
             let is_alive = if let Some(ref mut c) = child {
                 match c.try_wait() {
                     Ok(None) => true,
                     Ok(Some(_)) => {
-
                         if let Some(ref name) = exe_filename {
                             is_exe_running(name)
                         } else {
@@ -919,7 +1099,6 @@ pub async fn launch_game(
             let total_elapsed = start_time.elapsed().as_secs();
 
             if is_alive {
-
                 if last_checkpoint.elapsed().as_secs() >= 60 {
                     let delta = total_elapsed.saturating_sub(uncommitted_secs);
                     if delta > 0 {
@@ -934,45 +1113,51 @@ pub async fn launch_game(
                     last_checkpoint = Instant::now();
                 }
 
-                let _ = app_clone.emit("game-status-changed", PlaytimeInfo {
-                    game_id: task_game_id.clone(),
-                    total_playtime_secs: initial_playtime + total_elapsed,
-                    is_running: true,
-                    session_duration_secs: total_elapsed,
-                });
+                let _ = app_clone.emit(
+                    "game-status-changed",
+                    PlaytimeInfo {
+                        game_id: task_game_id.clone(),
+                        total_playtime_secs: initial_playtime + total_elapsed,
+                        is_running: true,
+                        session_duration_secs: total_elapsed,
+                    },
+                );
             } else {
-
                 let remaining_delta = total_elapsed.saturating_sub(uncommitted_secs);
                 let final_total = if let Some(state) = app_clone.try_state::<AppState>() {
                     let mut total = initial_playtime + total_elapsed;
                     if let Ok(db) = state.db.lock() {
                         let cur_time = Utc::now().timestamp();
                         if remaining_delta > 0 {
-                            if let Ok(t) = db.add_game_playtime(&task_game_id, remaining_delta, cur_time) {
+                            if let Ok(t) =
+                                db.add_game_playtime(&task_game_id, remaining_delta, cur_time)
+                            {
                                 total = t;
                             }
                         }
                     }
                     if let Ok(mut session) = state.active_session.lock() {
-                        if let Some(ref s) = *session {
-                            if s.game_id == task_game_id {
-                                *session = None;
-                            }
-                        }
+                        session.remove(&task_game_id);
                     }
                     total
                 } else {
                     initial_playtime + total_elapsed
                 };
 
-                info!("[PlaytimeMonitor] Game {} exited. Session: {}s, Total: {}s", task_game_id, total_elapsed, final_total);
+                info!(
+                    "[PlaytimeMonitor] Game {} exited. Session: {}s, Total: {}s",
+                    task_game_id, total_elapsed, final_total
+                );
 
-                let _ = app_clone.emit("game-status-changed", PlaytimeInfo {
-                    game_id: task_game_id,
-                    total_playtime_secs: final_total,
-                    is_running: false,
-                    session_duration_secs: 0,
-                });
+                let _ = app_clone.emit(
+                    "game-status-changed",
+                    PlaytimeInfo {
+                        game_id: task_game_id,
+                        total_playtime_secs: final_total,
+                        is_running: false,
+                        session_duration_secs: 0,
+                    },
+                );
                 break;
             }
         }
@@ -986,19 +1171,23 @@ pub async fn get_game_playtime(
     game_id: String,
     state: State<'_, AppState>,
 ) -> Result<PlaytimeInfo, AppError> {
-    let db = state.db.lock().map_err(|_| AppError::Other("DB lock poisoned".into()))?;
+    let db = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Other("DB lock poisoned".into()))?;
     let total_secs = db.get_game_playtime(&game_id).unwrap_or(0);
-    let session = state.active_session.lock().unwrap();
-    if let Some(ref s) = *session {
-        if s.game_id == game_id {
-            let elapsed = s.started_at.elapsed().as_secs();
-            return Ok(PlaytimeInfo {
-                game_id,
-                total_playtime_secs: total_secs + elapsed,
-                is_running: true,
-                session_duration_secs: elapsed,
-            });
-        }
+    let session = state
+        .active_session
+        .lock()
+        .map_err(|_| AppError::Other("Session lock poisoned".into()))?;
+    if let Some(s) = session.get(&game_id) {
+        let elapsed = s.started_at.elapsed().as_secs();
+        return Ok(PlaytimeInfo {
+            game_id,
+            total_playtime_secs: total_secs + elapsed,
+            is_running: true,
+            session_duration_secs: elapsed,
+        });
     }
     Ok(PlaytimeInfo {
         game_id,
@@ -1015,14 +1204,21 @@ pub async fn get_game_disk_size(
     state: State<'_, AppState>,
 ) -> Result<GameDiskSize, AppError> {
     let (install_path, exe_path, cached_size) = {
-        let db = state.db.lock().map_err(|_| AppError::Other("DB lock poisoned".into()))?;
-        let game = db.get_game_by_id(&game_id)?
+        let db = state
+            .db
+            .lock()
+            .map_err(|_| AppError::Other("DB lock poisoned".into()))?;
+        let game = db
+            .get_game_by_id(&game_id)?
             .ok_or_else(|| AppError::Other(format!("Game #{game_id} not found")))?;
         (game.install_path, game.exe_path, game.install_size_bytes)
     };
 
     let cache_size = {
-        let db = state.db.lock().map_err(|_| AppError::Other("DB lock poisoned".into()))?;
+        let db = state
+            .db
+            .lock()
+            .map_err(|_| AppError::Other("DB lock poisoned".into()))?;
         let entries = db.get_caches_for_game(&game_id).unwrap_or_default();
         entries.iter().map(|e| e.size_bytes).sum::<u64>()
     };
@@ -1042,9 +1238,19 @@ pub async fn get_game_disk_size(
         let p = PathBuf::from(ep);
 
         if let Some(parent) = p.parent() {
-            if parent.file_name().map(|n| n.to_string_lossy().to_lowercase()).as_deref() == Some("win64") {
+            if parent
+                .file_name()
+                .map(|n| n.to_string_lossy().to_lowercase())
+                .as_deref()
+                == Some("win64")
+            {
                 if let Some(grandparent) = parent.parent() {
-                    if grandparent.file_name().map(|n| n.to_string_lossy().to_lowercase()).as_deref() == Some("binaries") {
+                    if grandparent
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_lowercase())
+                        .as_deref()
+                        == Some("binaries")
+                    {
                         if let Some(game_root) = grandparent.parent().and_then(|p| p.parent()) {
                             Some(game_root.to_path_buf())
                         } else {
@@ -1070,7 +1276,11 @@ pub async fn get_game_disk_size(
         if dir.exists() {
             tokio::task::spawn_blocking(move || {
                 let mut total: u64 = 0;
-                for entry in walkdir::WalkDir::new(&dir).follow_links(false).into_iter().filter_map(|e| e.ok()) {
+                for entry in walkdir::WalkDir::new(&dir)
+                    .follow_links(false)
+                    .into_iter()
+                    .filter_map(|e| e.ok())
+                {
                     if let Ok(meta) = entry.metadata() {
                         if meta.is_file() {
                             total = total.saturating_add(meta.len());
@@ -1107,7 +1317,10 @@ pub async fn update_game_exe(
     exe_path: String,
     state: State<'_, AppState>,
 ) -> Result<(), AppError> {
-    let db = state.db.lock().map_err(|_| AppError::Other("DB lock poisoned".into()))?;
+    let db = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Other("DB lock poisoned".into()))?;
     db.update_game_exe_path(&game_id, &exe_path)?;
     info!("[cmd] Updated game {} executable to {}", game_id, exe_path);
     Ok(())
@@ -1131,9 +1344,11 @@ pub async fn fetch_steam_metadata(
     app_id: String,
     state: State<'_, AppState>,
 ) -> Result<SteamAppDetails, AppError> {
-
     {
-        let db = state.db.lock().map_err(|_| AppError::Other("DB lock poisoned".into()))?;
+        let db = state
+            .db
+            .lock()
+            .map_err(|_| AppError::Other("DB lock poisoned".into()))?;
         if let Ok(Some(cached_json)) = db.get_cached_metadata(&app_id) {
             if let Ok(details) = serde_json::from_str::<SteamAppDetails>(&cached_json) {
                 return Ok(details);
@@ -1183,7 +1398,10 @@ pub async fn update_game_metadata(
     release_date: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<(), AppError> {
-    let db = state.db.lock().map_err(|_| AppError::Other("DB lock poisoned".into()))?;
+    let db = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Other("DB lock poisoned".into()))?;
     db.update_game_metadata(
         &game_id,
         name.as_deref(),
@@ -1211,21 +1429,32 @@ pub async fn sync_steam_web_api(
     steam_id: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<usize, AppError> {
+    let final_api_key = if api_key.trim().is_empty() {
+        crate::utils::get_steam_api_key()
+            .ok_or_else(|| AppError::Other("Please enter a Steam Web API Key first.".into()))?
+    } else {
+        api_key
+    };
+
     let final_steam_id = if let Some(id) = steam_id.filter(|s| !s.trim().is_empty()) {
         id
     } else {
-        SteamApiClient::detect_local_steam_id()
-            .ok_or_else(|| AppError::Other("No Steam ID provided and none found in loginusers.vdf".into()))?
+        SteamApiClient::detect_local_steam_id().ok_or_else(|| {
+            AppError::Other("No Steam ID provided and none found in loginusers.vdf".into())
+        })?
     };
 
     let owned_games = tokio::task::spawn_blocking(move || {
         let client = SteamApiClient::new();
-        client.fetch_owned_games(&api_key, &final_steam_id)
+        client.fetch_owned_games(&final_api_key, &final_steam_id)
     })
     .await
     .map_err(|e| AppError::Other(format!("Steam Web API sync panic: {e}")))??;
 
-    let db = state.db.lock().map_err(|_| AppError::Other("DB lock poisoned".into()))?;
+    let db = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Other("DB lock poisoned".into()))?;
     let mut updated_count = 0;
 
     for g in owned_games {
@@ -1242,7 +1471,11 @@ pub async fn sync_steam_web_api(
             install_path: String::new(),
             exe_path: None,
             app_id: Some(app_id_str),
-            last_played: if g.playtime_forever > 0 { Some(g.playtime_forever as i64 * 60) } else { None },
+            last_played: if g.playtime_forever > 0 {
+                Some(g.playtime_forever as i64 * 60)
+            } else {
+                None
+            },
             icon_url: g.img_icon_url,
             cover_url: Some(cover_url),
             hero_url: Some(hero_url),
@@ -1266,7 +1499,10 @@ pub async fn sync_steam_web_api(
 
 #[tauri::command]
 pub async fn delete_game(game_id: String, state: State<'_, AppState>) -> Result<(), AppError> {
-    let db = state.db.lock().map_err(|_| AppError::Other("DB lock poisoned".into()))?;
+    let db = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Other("DB lock poisoned".into()))?;
     if let Ok(Some(game)) = db.get_game_by_id(&game_id) {
         let _ = db.exclude_game(&game);
     } else {
@@ -1293,20 +1529,31 @@ pub async fn delete_game(game_id: String, state: State<'_, AppState>) -> Result<
         let _ = db.exclude_game(&fallback);
     }
     db.delete_game(&game_id)?;
-    info!("[cmd] delete_game: {} excluded and deleted from DB", game_id);
+    info!(
+        "[cmd] delete_game: {} excluded and deleted from DB",
+        game_id
+    );
     Ok(())
 }
 
 #[tauri::command]
-pub async fn get_excluded_games(state: State<'_, AppState>) -> Result<Vec<crate::db::ExcludedGame>, AppError> {
-    let db = state.db.lock().map_err(|_| AppError::Other("DB lock poisoned".into()))?;
+pub async fn get_excluded_games(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::db::ExcludedGame>, AppError> {
+    let db = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Other("DB lock poisoned".into()))?;
     let games = db.get_excluded_games()?;
     Ok(games)
 }
 
 #[tauri::command]
 pub async fn restore_game(game_id: String, state: State<'_, AppState>) -> Result<(), AppError> {
-    let db = state.db.lock().map_err(|_| AppError::Other("DB lock poisoned".into()))?;
+    let db = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Other("DB lock poisoned".into()))?;
     db.restore_excluded_game(&game_id)?;
     info!("[cmd] restore_game: {} un-excluded", game_id);
     Ok(())
@@ -1318,7 +1565,6 @@ pub fn deduplicate_games(games: &mut Vec<DetectedGame>) {
     let mut seen_paths = std::collections::HashSet::new();
 
     games.retain(|game| {
-
         let id_lower = game.id.to_lowercase();
         if !seen_ids.insert(id_lower) {
             return false;
@@ -1371,7 +1617,10 @@ pub async fn compress_shader_cache(
     .map_err(|e| AppError::Other(format!("Compression thread error: {e}")))??;
 
     {
-        let db = state.db.lock().map_err(|_| AppError::Other("DB lock poisoned".into()))?;
+        let db = state
+            .db
+            .lock()
+            .map_err(|_| AppError::Other("DB lock poisoned".into()))?;
         db.insert_vault_entry(&entry)?;
     }
     Ok(entry)
@@ -1384,7 +1633,10 @@ pub async fn decompress_shader_cache(
     state: State<'_, AppState>,
 ) -> Result<(), AppError> {
     let vault_entry = {
-        let db = state.db.lock().map_err(|_| AppError::Other("DB lock poisoned".into()))?;
+        let db = state
+            .db
+            .lock()
+            .map_err(|_| AppError::Other("DB lock poisoned".into()))?;
         db.get_vault_entry_by_id(&vault_id)?
             .ok_or_else(|| AppError::Other(format!("Vault entry #{vault_id} not found")))?
     };
@@ -1403,7 +1655,10 @@ pub async fn decompress_shader_cache(
     .map_err(|e| AppError::Other(format!("Decompression thread error: {e}")))??;
 
     {
-        let db = state.db.lock().map_err(|_| AppError::Other("DB lock poisoned".into()))?;
+        let db = state
+            .db
+            .lock()
+            .map_err(|_| AppError::Other("DB lock poisoned".into()))?;
         db.update_vault_entry_status(&vault_id, "decompressed")?;
     }
 
@@ -1414,7 +1669,10 @@ pub async fn decompress_shader_cache(
 pub async fn get_vault_entries(
     state: State<'_, AppState>,
 ) -> Result<Vec<CompressedVaultEntry>, AppError> {
-    let db = state.db.lock().map_err(|_| AppError::Other("DB lock poisoned".into()))?;
+    let db = state
+        .db
+        .lock()
+        .map_err(|_| AppError::Other("DB lock poisoned".into()))?;
     Ok(db.get_all_vault_entries()?)
 }
 
@@ -1424,7 +1682,10 @@ pub async fn delete_vault_entry(
     state: State<'_, AppState>,
 ) -> Result<(), AppError> {
     let entry = {
-        let db = state.db.lock().map_err(|_| AppError::Other("DB lock poisoned".into()))?;
+        let db = state
+            .db
+            .lock()
+            .map_err(|_| AppError::Other("DB lock poisoned".into()))?;
         db.get_vault_entry_by_id(&vault_id)?
     };
     if let Some(e) = entry {
@@ -1432,7 +1693,10 @@ pub async fn delete_vault_entry(
         if comp_path.exists() {
             let _ = std::fs::remove_file(&comp_path);
         }
-        let db = state.db.lock().map_err(|_| AppError::Other("DB lock poisoned".into()))?;
+        let db = state
+            .db
+            .lock()
+            .map_err(|_| AppError::Other("DB lock poisoned".into()))?;
         db.delete_vault_entry(&vault_id)?;
     }
     Ok(())
@@ -1452,4 +1716,149 @@ pub async fn open_vault_folder() -> Result<(), AppError> {
     Ok(())
 }
 
+#[tauri::command]
+pub async fn get_library_statistics(
+    state: State<'_, AppState>,
+) -> Result<LibraryStatistics, AppError> {
+    let (games, active_sessions) = {
+        let db = state
+            .db
+            .lock()
+            .map_err(|_| AppError::Other("DB lock poisoned".into()))?;
+        let g = db.get_all_games()?;
+        let session = state
+            .active_session
+            .lock()
+            .map_err(|_| AppError::Other("Session lock poisoned".into()))?;
+        let active: std::collections::HashMap<String, u64> = session
+            .iter()
+            .map(|(gid, s)| (gid.clone(), s.started_at.elapsed().as_secs()))
+            .collect();
+        (g, active)
+    };
 
+    let total_games = games.len();
+    let mut installed_games = 0;
+    let mut not_installed_games = 0;
+    let mut played_games = 0;
+    let mut not_played_games = 0;
+    let mut total_playtime_seconds: u64 = 0;
+    let mut total_install_size_bytes: u64 = 0;
+    let mut total_shader_cache_size_bytes: u64 = 0;
+    let mut platform_counts: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    let mut all_game_stats: Vec<GameStorageStat> = Vec::new();
+
+    {
+        let db = state
+            .db
+            .lock()
+            .map_err(|_| AppError::Other("DB lock poisoned".into()))?;
+
+        for game in games {
+            let mut playtime = game.playtime_seconds;
+            if let Some(&active_elapsed) = active_sessions.get(&game.id) {
+                playtime += active_elapsed;
+            }
+
+            let is_installed = if !game.install_path.is_empty() {
+                std::path::Path::new(&game.install_path).exists()
+            } else if let Some(ref ep) = game.exe_path {
+                std::path::Path::new(ep).exists()
+            } else {
+                false
+            };
+
+            if is_installed {
+                installed_games += 1;
+            } else {
+                not_installed_games += 1;
+            }
+
+            if playtime > 0 {
+                played_games += 1;
+            } else {
+                not_played_games += 1;
+            }
+
+            total_playtime_seconds += playtime;
+            total_install_size_bytes += game.install_size_bytes;
+
+            let cache_size = db
+                .get_caches_for_game(&game.id)
+                .unwrap_or_default()
+                .iter()
+                .map(|c| c.size_bytes)
+                .sum::<u64>();
+            total_shader_cache_size_bytes += cache_size;
+
+            let plat_str = format!("{:?}", game.platform);
+            *platform_counts.entry(plat_str.clone()).or_insert(0) += 1;
+
+            all_game_stats.push(GameStorageStat {
+                id: game.id,
+                name: game.name,
+                platform: plat_str,
+                cover_url: game.cover_url,
+                hero_url: game.hero_url,
+                icon_url: game.icon_url,
+                install_size_bytes: game.install_size_bytes,
+                cache_size_bytes: cache_size,
+                total_size_bytes: game.install_size_bytes + cache_size,
+                playtime_seconds: playtime,
+                last_played: game.last_played,
+                is_installed,
+                install_path: game.install_path,
+            });
+        }
+    }
+
+    let total_backup_size_bytes = {
+        let backup_dir = dirs::document_dir()
+            .or_else(dirs::data_local_dir)
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("Kcache")
+            .join("SaveBackups");
+        if backup_dir.exists() {
+            walkdir::WalkDir::new(&backup_dir)
+                .into_iter()
+                .flatten()
+                .filter(|e| e.path().is_file())
+                .filter_map(|e| e.metadata().ok())
+                .map(|m| m.len())
+                .sum::<u64>()
+        } else {
+            0
+        }
+    };
+
+    let total_storage_used_bytes =
+        total_install_size_bytes + total_shader_cache_size_bytes + total_backup_size_bytes;
+    let average_playtime_seconds = if total_games > 0 {
+        total_playtime_seconds / total_games as u64
+    } else {
+        0
+    };
+
+    let mut top_played_games = all_game_stats.clone();
+    top_played_games.sort_by(|a, b| b.playtime_seconds.cmp(&a.playtime_seconds));
+    top_played_games.retain(|g| g.playtime_seconds > 0);
+    top_played_games.truncate(15);
+
+    Ok(LibraryStatistics {
+        total_games,
+        installed_games,
+        not_installed_games,
+        played_games,
+        not_played_games,
+        total_playtime_seconds,
+        average_playtime_seconds,
+        total_install_size_bytes,
+        total_shader_cache_size_bytes,
+        total_backup_size_bytes,
+        total_storage_used_bytes,
+        platform_counts,
+        top_played_games,
+        all_games: all_game_stats,
+    })
+}

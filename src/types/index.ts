@@ -212,3 +212,36 @@ export type SortField = "size" | "name" | "platform" | "last_modified";
 export type SortDir = "asc" | "desc";
 export type FilterPlatform = "all" | GamePlatform;
 export type FilterHasCache = "all" | "has_cache" | "no_cache";
+
+export interface GameStorageStat {
+  id: string;
+  name: string;
+  platform: string;
+  cover_url?: string | null;
+  hero_url?: string | null;
+  icon_url?: string | null;
+  install_size_bytes: number;
+  cache_size_bytes: number;
+  total_size_bytes: number;
+  playtime_seconds: number;
+  last_played?: number | null;
+  is_installed: boolean;
+  install_path: string;
+}
+
+export interface LibraryStatistics {
+  total_games: number;
+  installed_games: number;
+  not_installed_games: number;
+  played_games: number;
+  not_played_games: number;
+  total_playtime_seconds: number;
+  average_playtime_seconds: number;
+  total_install_size_bytes: number;
+  total_shader_cache_size_bytes: number;
+  total_backup_size_bytes: number;
+  total_storage_used_bytes: number;
+  platform_counts: Record<string, number>;
+  top_played_games: GameStorageStat[];
+  all_games: GameStorageStat[];
+}
