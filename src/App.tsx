@@ -4,6 +4,7 @@ import { Dashboard } from "./pages/Dashboard";
 import { Settings } from "./pages/Settings";
 import { TrashPage } from "./pages/Trash";
 import { CompressorPage } from "./pages/Compressor";
+import { SaveManager } from "./components/SaveManager";
 
 const router = createBrowserRouter([
   {
@@ -14,6 +15,7 @@ const router = createBrowserRouter([
       { path: "settings", element: <Settings /> },
       { path: "trash",    element: <TrashPage /> },
       { path: "compressor", element: <CompressorPage /> },
+      { path: "saves",    element: <SaveManager /> },
     ],
   },
 ]);

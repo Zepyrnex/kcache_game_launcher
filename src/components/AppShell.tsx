@@ -11,6 +11,7 @@ import {
   CheckCircle2,
   Cpu,
   FolderArchive,
+  Save,
 } from "lucide-react";
 import clsx from "clsx";
 
@@ -20,6 +21,7 @@ const NAV_ITEMS = [
   { to: "/", label: "Game Library", icon: LayoutDashboard },
   { to: "/trash", label: "Trash", icon: Trash2 },
   { to: "/compressor", label: "Compressor", icon: FolderArchive },
+  { to: "/saves", label: "Save Manager", icon: Save },
   { to: "/settings", label: "Settings", icon: Settings },
 ];
 
@@ -188,7 +190,7 @@ export function AppShell() {
         </div>
 
         <div className="px-4 py-3 border-t border-white/5 flex items-center justify-between flex-shrink-0 bg-surface-900/90">
-          <span className="text-[11px] text-gray-500">v0.1.0</span>
+          <span className="text-[11px] text-gray-500">v0.1.2</span>
         </div>
       </aside>
 

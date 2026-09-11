@@ -1,6 +1,6 @@
 [package]
 name = "kcache"
-version = "0.1.1"
+version = "0.1.2"
 description = "Kcache — GPU shader cache manager & game launcher for PC gamers"
 authors = ["Kcache"]
 edition = "2021"
@@ -37,6 +37,8 @@ dirs = "5"
 regex = "1"
 reqwest = { version = "0.12", features = ["blocking", "json"] }
 libloading = "0.8"
+serde_yaml = "0.9.34"
+zip = "4.2.0"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"

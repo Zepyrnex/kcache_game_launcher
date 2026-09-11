@@ -9,6 +9,7 @@ pub mod commands;
 pub mod scanners;
 pub mod libraries;
 pub mod steam_api;
+pub mod save_manager;
 
 use commands::AppState;
 use db::Database;
@@ -101,6 +102,8 @@ pub fn run() {
             commands::get_vault_entries,
             commands::delete_vault_entry,
             commands::open_vault_folder,
+            save_manager::detect_saves,
+            save_manager::backup_saves,
         ])
         .run(tauri::generate_context!())
         .expect("Error while running Kcache");
