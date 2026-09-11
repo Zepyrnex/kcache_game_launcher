@@ -10,11 +10,13 @@ import {
   Zap,
   CheckCircle2,
   Cpu,
+  Brush,
 } from "lucide-react";
 import clsx from "clsx";
 
 const NAV_ITEMS = [
   { to: "/", label: "Game Library", icon: LayoutDashboard },
+  { to: "/janitor", label: "Cache Janitor", icon: Brush },
   { to: "/trash", label: "Trash", icon: Trash2 },
   { to: "/settings", label: "Settings", icon: Settings },
 ];

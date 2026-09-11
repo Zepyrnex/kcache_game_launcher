@@ -3,6 +3,7 @@ import { AppShell } from "./components/AppShell";
 import { Dashboard } from "./pages/Dashboard";
 import { Settings } from "./pages/Settings";
 import { TrashPage } from "./pages/Trash";
+import { JanitorPage } from "./pages/Janitor";
 
 const router = createBrowserRouter([
   {
@@ -10,8 +11,9 @@ const router = createBrowserRouter([
     element: <AppShell />,
     children: [
       { index: true,     element: <Dashboard /> },
-      { path: "settings", element: <Settings /> },
+      { path: "janitor", element: <JanitorPage /> },
       { path: "trash",    element: <TrashPage /> },
+      { path: "settings", element: <Settings /> },
     ],
   },
 ]);

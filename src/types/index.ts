@@ -175,3 +175,23 @@ export type SortField = "size" | "name" | "platform" | "last_modified";
 export type SortDir = "asc" | "desc";
 export type FilterPlatform = "all" | GamePlatform;
 export type FilterHasCache = "all" | "has_cache" | "no_cache";
+
+export type CacheAgeCategory = "active" | "stale" | "old" | "ancient";
+
+export interface CategorizedCaches {
+  active: CacheEntry[];
+  stale: CacheEntry[];
+  old: CacheEntry[];
+  ancient: CacheEntry[];
+  uncategorized: CacheEntry[];
+}
+
+export interface CategorySummary {
+  category: CacheAgeCategory;
+  label: string;
+  description: string;
+  count: number;
+  totalBytes: number;
+  color: string;
+  icon: string;
+}
