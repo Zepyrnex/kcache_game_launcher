@@ -21,7 +21,6 @@ Download the latest installer for Windows 10/11:
 - **Total Storage Breakdown**: Calculates and displays full disk space consumed by game install files and related shader caches.
 - **Playtime Tracker**: Built-in background playtime monitor (0% CPU idle, <50 KB RAM) that tracks session and lifetime playtime.
 - **Custom Executable Paths**: Set and change game target launch executables and working directories on the fly.
-- **Native Windows Installer**: Built with Tauri v2 and NSIS, with clean desktop shortcuts and an included `uninstall.exe`.
 
 ---
 
